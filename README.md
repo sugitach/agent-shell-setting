@@ -158,3 +158,41 @@ claude-code/hooks/circuit-breaker.py => ~/.claude/hooks/circuit-breaker.py
 4. ユーザーが「サーキットブレーカー解除」または `circuit breaker reset` と明示すると、`UserPromptSubmit` hook がそのセッションの停止状態を解除する。
 
 hook のソースは [`claude-code/hooks/circuit-breaker.py`](claude-code/hooks/circuit-breaker.py) に保管し、実行用のコピーを `~/.claude/hooks/` に配置する。スクリプトを更新した場合は実行用コピーも同期する。
+
+## 8. 4役の開発スキル
+
+| スキル原本 | 担当 |
+| --- | --- |
+| [orchestrator](skills/orchestrator/SKILL.md) | 唯一の親。委任・ブランチ・コミット・push・PR・CI・停止と再開を管理 |
+| [planner](skills/planner/SKILL.md) | Issue の作成・確認、要件・DoD・coder の実装計画 |
+| [coder](skills/coder/SKILL.md) | 承認済み計画に従った TDD（Red → Green）と実装 |
+| [reviewer](skills/reviewer/SKILL.md) | 計画・実装をレビューし approved / changes_requested / blocked を返す |
+
+これらは Codex・Claude Code・agy のスキル配置先へ同じ内容でコピーする。
+既存の github-tdd-workflow は単独実行用として残し、役割が指定された場合は担当工程だけを適用する。
+
+```text
+親 → planner → reviewer(plan) → coder → reviewer(implementation)
+    → 親が commit / push / PR → CI → 完了
+```
+
+指摘があれば担当へ戻す。CI 失敗が仕様・設計に関わる場合は planner、実装・テスト・ビルドの不備なら coder に戻す。
+修正後は再レビューし、最新 PR head の CI 成功を確認する。環境障害・権限不足には根拠なくコード変更を行わない。
+親も子もハーネスは固定しない。既定は planner=claude、coder=codex、reviewer=agy で、依頼時に上書きできる。
+
+親への依頼例:
+
+> orchestrator スキルで Issue #123 を進めて。planner=claude、coder=codex、reviewer=agy。
+
+親が子を呼ぶ際には、担当スキル、Issue、計画版、作業範囲、成果物の返却先を渡す。
+状態と引き継ぎの形式は [handoff.md](skills/orchestrator/references/handoff.md) を参照。
+
+### 実装済みの範囲と次の接続作業
+
+スキル・共有ルール・配布は実装済み。CLI がインストール済みであることだけでは、自動委任が完成したことにはならない。
+共通の CLI/MCP/ACP 呼び出しツール、親の単一起動ロック、タスク単位の強制サーキットブレーカーは未実装。
+現時点の横断的な停止・回数引き継ぎはスキルの指示であり、Claude の既存 hook は従来どおりセッション単位で動作する。
+既存 hook は意図した TDD Red でもツール失敗なら記録するため、実運用前に TDD と停止判定の整合性を検証する必要がある。
+利用する ACP アダプタでのスキル読み込みと、3ハーネスを使った一連の動作は未検証。
+
+この設定リポジトリにはリモートがないため、今回のスキル作成はローカルブランチで管理し、Issue・PR・CI は作成・実行していない。
