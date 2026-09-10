@@ -195,10 +195,26 @@ hook のソースは [`claude-code/hooks/circuit-breaker.py`](claude-code/hooks/
 
 ### 実装済みの範囲と次の接続作業
 
-スキル・共有ルール・方式選択ツール・配布は実装済み。CLI がインストール済みであることだけでは、自動委任が完成したことにはならない。
-共通の CLI/MCP/ACP 呼び出しツール、親の単一起動ロック、タスク単位の強制サーキットブレーカーは未実装。
+スキル・共有ルール・方式選択ツール・外部CLIランナー・配布は実装済み。
+外部実行は [external_runner.py](skills/orchestrator/scripts/external_runner.py) の run / status / cancel を使う。
+起動方法、結果の読み方、権限、停止の制約は [external-runner.md](skills/orchestrator/references/external-runner.md) を参照。
+同じタスクの外部起動は排他し、親が blocked の場合や未解決の旧ジョブがある場合は起動を拒否する。
+親の単一起動ロック、native と external をまたぐ排他、修正回数の自動判定・強制は未実装。
 現時点の横断的な停止・回数引き継ぎはスキルの指示であり、Claude の既存 hook は従来どおりセッション単位で動作する。
 既存 hook は意図した TDD Red でもツール失敗なら記録するため、実運用前に TDD と停止判定の整合性を検証する必要がある。
-利用する ACP アダプタでのスキル読み込みと、3ハーネスを使った一連の動作は未検証。
+2026-09-10 の接続確認結果:
+
+| 接続 | 結果 |
+| --- | --- |
+| 現在の Codex セッション → 標準サブエージェント | 起動・結果返却・追加依頼を確認。実装レビューにも使用 |
+| 外部 Codex CLI | 担当 skill を渡し、`approved / HARNESS_SMOKE_OK` を取得 |
+| 外部 agy CLI | request.md を読んで `approved / HARNESS_SMOKE_OK` を取得 |
+| 外部 Claude CLI | `Not logged in · Please run /login`。認証完了後の再検証が必要 |
+
+`tests/fixtures/smoke-request.md` は変更操作なしの計画レビュー用の入力。
+CLI ランナーの正常系・JSONエラー・空回答・タイムアウト・取消・排他・終了時競合は偽CLIによる自動テストで検証している。
+実行ログは `.orchestration/` に保存し、Git 対象外とする。
+別の ACP アダプタ／起動環境での標準サブエージェント利用可否、および3ハーネスでの実装→PR→CIの一連の実運用は未検証。
+agy は正常な結果返却を確認したが、取消時に外部サービス側の処理まで停止したかは確認できないため unknown を返して再起動を拒否する。
 
 この設定リポジトリにはリモートがないため、今回のスキル作成はローカルブランチで管理し、Issue・PR・CI は作成・実行していない。
