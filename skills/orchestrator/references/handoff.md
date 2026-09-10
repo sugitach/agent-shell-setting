@@ -12,6 +12,8 @@
 {
   "task_id": "issue-123",
   "owner_session": "parent-session-id",
+  "parent_harness": "codex",
+  "transport_mode": "auto",
   "phase": "planning",
   "roles": {"planner": "claude", "coder": "codex", "reviewer": "agy"},
   "issue": "issue URL",
@@ -27,7 +29,8 @@
 ```
 
 phase は planning / plan_review / coding / implementation_review / publishing / ci / blocked / complete。
-active_child にはハーネス、セッション・ジョブID、担当、作業ディレクトリ、起動時刻を記録する。
+active_child にはハーネス、transport（native / external）、選択根拠、セッション・ジョブID、担当、作業ディレクトリ、起動時刻を記録する。
+子のIDは transport とハーネスと組にして扱う。方式を変えても task_id・失敗履歴・成果物の参照を維持する。
 review には判定だけでなく、計画版、対象コミットと未コミット差分の識別情報、レビュー結果パスを保存する。
 レビュー後に差分が変われば承認を無効にする。公開前の自動整形やコミット hook による変更も含む。
 failures には原因ID、初回エラー、修正ごとの担当・アプローチ・結果、試行回数、解除履歴を保存する。
