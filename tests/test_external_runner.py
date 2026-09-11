@@ -4,6 +4,7 @@ import json
 import importlib.util
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -47,6 +48,76 @@ class RunnerTest(unittest.TestCase):
         states = list((self.workspace / ".orchestration/task-1/jobs").glob("*/state.json"))
         self.assertEqual(len(states), 1)
         return json.loads(states[0].read_text()), states[0].parent
+
+    def run_cooperative_agy(self, wrong_id=False):
+        """agy COOPERATIVE分岐の停止確認ロジックを、実プロセス・実SIGINT・実時間待機に
+        依存せずin-processで決定的に検証するための共通ヘルパー。
+
+        検証意図（従来のsubprocess版から変更なし）:
+          - wrong_id=False: cooperative timeoutが成立した場合、stop_confirmed=True・
+            status="timed_out"・conversation_id="fake-agy"・harness_status="INTERRUPTED"
+            になること。
+          - wrong_id=True: init と result の会話IDが不一致の場合は停止を確認できず、
+            status="unknown"になること。
+
+        実プロセスを起動して実SIGINTの配送・応答を壁時計時間で待ち合わせる方式は、
+        「起動レース」（子のシグナルハンドラ登録前にSIGINTが届く）と
+        「停止確認レース」（--cancel-grace内にプロセス終了を検知できない）という
+        2つの実時間レースにより低確率で失敗する（Issue #1）。そのため
+        subprocess.Popen / os.killpg / time.monotonic / time.sleep / stop_group を
+        決定的なテストダブルに置き換え、本番の AgyStream.finish() と interrupt_agy() の
+        ロジック自体はそのまま（変更・バイパスせず）実行させる。
+        """
+        prompt_text = "COOPERATIVE WRONG_ID" if wrong_id else "COOPERATIVE"
+        self.prompt.write_text(prompt_text)
+        args = type("Args", (), dict(
+            workspace=self.workspace, task_id="task-1", harness="agy", role="reviewer",
+            prompt_file=self.prompt, timeout=0.05, cancel_grace=0.05,
+            access="workspace-write", model=None, reasoning_effort=None))()
+
+        # 擬似クロック: 呼び出すたびに固定ステップで進む決定的な時計。
+        # run()のtimeoutループ・interrupt_agyのgraceループのデッドライン判定は
+        # この呼び出し回数だけで決まり、実OSスケジューリングに一切左右されない。
+        clock = {"now": 0.0}
+
+        def fake_monotonic():
+            clock["now"] += 0.01
+            return clock["now"]
+
+        # 「SIGINTを受け取るまでは実行中(None)、受け取った後は終了済み」という
+        # 実プロセスの挙動をそのままモデル化する。固定回数のリストで擬似するのではなく
+        # SIGINT送信有無に連動させるため、ループ回数の見積もりミスによる
+        # StopIterationや意図しない分岐に陥らない。
+        sigint_sent = {"flag": False}
+
+        def fake_killpg(pid, sig):
+            if sig == signal.SIGINT:
+                sigint_sent["flag"] = True
+
+        def fake_poll():
+            return None if not sigint_sent["flag"] else -2
+
+        def fake_popen(command, cwd, stdin, stdout, stderr, start_new_session):
+            conversation_id = "other-session" if wrong_id else "fake-agy"
+            # 本番のstdout.logはテキストモード（"w"）で開かれるため、bytesではなくstrで書き込む。
+            stdout.write(json.dumps({"event": "init", "conversation_id": "fake-agy"}) + "\n")
+            stdout.write(json.dumps({"event": "result", "result": {
+                "conversation_id": conversation_id, "status": "INTERRUPTED", "response": ""}}) + "\n")
+            stdout.flush()
+            process = mock.Mock(pid=999999, returncode=-2)
+            process.poll.side_effect = fake_poll
+            return process
+
+        with mock.patch.dict(os.environ, self.env), \
+             mock.patch.object(runner.subprocess, "Popen", side_effect=fake_popen), \
+             mock.patch.object(runner.os, "killpg", side_effect=fake_killpg), \
+             mock.patch.object(runner, "stop_group"), \
+             mock.patch.object(runner.time, "monotonic", side_effect=fake_monotonic), \
+             mock.patch.object(runner.time, "sleep", return_value=None):
+            code = runner.run(args)
+
+        self.assertNotEqual(code, 0)
+        return self.state()[0]
 
     def test_success_and_skill_injection(self):
         result = self.run_job()
@@ -105,22 +176,20 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(self.state()[0]["status"], "unknown")
 
     def test_agy_cooperative_timeout_is_confirmed(self):
-        self.prompt.write_text("COOPERATIVE")
-        result = subprocess.run(self.command("agy", "0.3") + ["--access", "workspace-write", "--cancel-grace", "0.3"],
-                                env=self.env, capture_output=True, text=True, timeout=8)
-        self.assertNotEqual(result.returncode, 0)
-        state, _ = self.state()
+        # 実プロセス・実SIGINT・実時間待機ではなく、run_cooperative_agy()による
+        # in-process決定的モックでcooperative timeoutの停止確認を検証する
+        # （検証内容はsubprocess版から変更なし。理由はrun_cooperative_agyのdocstring参照）。
+        state = self.run_cooperative_agy(wrong_id=False)
         self.assertEqual(state["status"], "timed_out")
         self.assertTrue(state["stop_confirmed"])
         self.assertEqual(state["conversation_id"], "fake-agy")
         self.assertEqual(state["harness_status"], "INTERRUPTED")
 
     def test_agy_wrong_conversation_cannot_confirm_stop(self):
-        self.prompt.write_text("COOPERATIVE WRONG_ID")
-        result = subprocess.run(self.command("agy", "0.3") + ["--access", "workspace-write", "--cancel-grace", "0.3"],
-                                env=self.env, capture_output=True, text=True, timeout=8)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(self.state()[0]["status"], "unknown")
+        # 同上。会話ID不一致時にstop_confirmできずunknownになることを検証する
+        # （検証内容はsubprocess版から変更なし）。
+        state = self.run_cooperative_agy(wrong_id=True)
+        self.assertEqual(state["status"], "unknown")
 
     def test_agy_structured_error_is_not_success(self):
         self.prompt.write_text("JSON_ERROR")
@@ -195,7 +264,6 @@ class RunnerTest(unittest.TestCase):
                                     access="read-only", model=None, reasoning_effort=None))()
 
     def test_interrupt_during_cleanup_is_not_success(self):
-        import signal
         original = runner.stop_group
 
         def interrupted_cleanup(process):
