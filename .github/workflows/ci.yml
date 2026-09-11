@@ -23,3 +23,21 @@ jobs:
         with:
           python-version: "3.11"
       - run: python -m unittest discover -s tests -p "test_*.py" -v
+
+  agy-cooperative-e2e-reference:
+    name: "参考: agy協調SIGINT E2E（非必須・DoD対象外）"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: 実プロセスでの協調SIGINT応答を検証（flaky時は実装回帰の可能性を疑う）
+        run: python -m unittest discover -s tests -p "probe_agy_cooperative_e2e.py" -v
+      - name: 失敗時にジョブサマリーへ明示的な警告を残す
+        if: failure()
+        run: |
+          echo "### :warning: agy協調SIGINT参考E2Eテストが失敗しました" >> "$GITHUB_STEP_SUMMARY"
+          echo "このジョブは Issue #1 のDoD対象外の参考テストです。マージはブロックされません。" >> "$GITHUB_STEP_SUMMARY"
+          echo "タイムアウト・grace値は十分な余裕（2秒/5秒）を持たせているため、失敗した場合は" >> "$GITHUB_STEP_SUMMARY"
+          echo "スケジューリング遅延ではなく実装上の回帰の可能性を優先的に疑うこと。" >> "$GITHUB_STEP_SUMMARY"
