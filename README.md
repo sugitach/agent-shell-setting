@@ -190,7 +190,9 @@ hook のソースは [`claude-code/hooks/circuit-breaker.py`](claude-code/hooks/
 指摘があれば担当へ戻す。CI 失敗が仕様・設計に関わる場合は planner、実装・テスト・ビルドの不備なら coder に戻す。
 修正後は再レビューし、最新 PR head の CI 成功を確認する。環境障害・権限不足には根拠なくコード変更を行わない。
 親も子もハーネスは固定しない。既定は planner=claude、coder=codex、reviewer=agy で、依頼時に上書きできる。
-各役割には model と reasoning effort も個別指定できる。未指定ならハーネス既定値を使い、対象ハーネスが受け付けない指定は黙って変更せず blocked とする。
+各役割には model と reasoning effort も個別指定できる。明示指定がなければプロジェクト・共通設定から解決し、null のときはハーネス既定値を使う。対象ハーネスが受け付けない指定は黙って変更せず blocked とする。
+タスク state では roles.<role> に harness、model、reasoning_effort、各値の source をまとめて保存する。
+この統合レコードを route 選択と子の起動で共用し、top-level role_settings は新規 state に保存しない。
 
 親への依頼例:
 
@@ -219,6 +221,7 @@ null は対象の起動引数を省略し、各 CLI / native 子の既定値を�
 一回だけハーネス既定値を使いたい場合は、親への指定で model=default または
 reasoning effort=default とする。値は resolve_role_settings.py に workspace と role を渡して解決し、
 設定が無効なら子を起動せず blocked とする。
+プロジェクト YAML は model と reasoning_effort だけを上書きでき、harness の割当は変更できない。
 
 設定 reader は一般 YAML parser ではなく、UTF-8・64 KiB 以下の限定 YAML v1 だけを受理する。
 version: 1 と roles: を必須とし、role は planner / coder / reviewer、field は model /

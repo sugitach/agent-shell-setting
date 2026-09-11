@@ -19,11 +19,13 @@ description: 複数ハーネスで開発を分担するとき、唯一の親セ�
    workspace 直下の同名ファイルである。field ごとの優先順位は明示指定 > プロジェクト > 共通設定。
    引数なしはプロジェクト・共通設定を使い、明示 default は値を null にして CLI / native 子の
    その引数を省略する。解決器が設定・workspace・安全な読取を拒否した場合は、子を起動せず
-   blocked にする。解決後の値と field ごとの source を state / handoff に保存し、指定値を
-   使えないハーネスへ勝手に変更・丸め込みをしない。
-3. [references/routing.md](references/routing.md) に従い、同一ハーネスなら利用可能な標準サブエージェントを優先し、別ハーネスや独立した設定が必要な場合は外部呼び出しを選ぶ。親の公開ツールと必要な機能を確認し、選択ツールで方式を確定する。要求を満たす方式がなければ blocked として制約を報告する。
+   blocked にする。既定または明示指定から決めた harness と、解決した model・reasoning_effort・
+   sources を一つの roles.<role> レコードに保存する。roles は唯一の正本とし、top-level の
+   role_settings は新規 state に保存しない。プロジェクト YAML と resolver は harness を扱わない。
+   指定値を使えないハーネスへ勝手に変更・丸め込みをしない。
+3. [references/routing.md](references/routing.md) に従い、同じ roles.<role> の harness を使って、同一ハーネスなら利用可能な標準サブエージェントを優先し、別ハーネスや独立した設定が必要な場合は外部呼び出しを選ぶ。親の公開ツールと必要な機能を確認し、選択ツールで方式を確定する。要求を満たす方式がなければ blocked として制約を報告する。
 4. 同じタスクに既存の親がいれば重複起動しない。保存した owner セッションと実際の生存状態を確認し、引き継ぐときは旧親・子が停止済みであることを確認する。判断できなければ確認を求める。
-5. 選んだ方式で独立した子コンテキスト（標準サブエージェントまたは外部セッション）を起動し、役割 skill、Issue・計画、対象ディレクトリ、権限、返却先、解決済みの model・reasoning effort を渡す。解決値が null の field は native の起動パラメータおよび external runner の対応引数を省略する。子からの再委任は禁止。一度に動かす担当は1セッションとし、書き込み競合を避ける。
+5. 選んだ方式で独立した子コンテキスト（標準サブエージェントまたは外部セッション）を起動し、同じ roles.<role> の harness と、役割 skill、Issue・計画、対象ディレクトリ、権限、返却先、解決済みの model・reasoning effort を渡す。解決値が null の field は native の起動パラメータおよび external runner の対応引数を省略する。active_child には実際に渡したこのレコードの値を記録する。子からの再委任は禁止。一度に動かす担当は1セッションとし、書き込み競合を避ける。
 
 CLI の認証・権限は子ごとに確認する。権限不足を bypass オプションで解消しない。親の hook が子の内部操作まで監視するとは見なさない。
 Codex のサンドボックスから外部 Claude を起動するときは、起動前に [外部 Claude の認証確認](references/external-runner.md#外部-claude-の認証確認) を適用する。`Not logged in` だけで再ログインを求めず、実行環境による認証状態の差を確認し、必要な承認の範囲でランナーをサンドボックス外から実行する。
