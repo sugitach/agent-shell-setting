@@ -199,6 +199,32 @@ hook のソースは [`claude-code/hooks/circuit-breaker.py`](claude-code/hooks/
 親が子を呼ぶ際には、担当スキル、Issue、計画版、作業範囲、成果物の返却先を渡す。
 状態と引き継ぎの形式は [handoff.md](skills/orchestrator/references/handoff.md) を参照。
 
+#### 役割別モデル・reasoning effort の既定値
+
+orchestrator の共通既定値は
+[skills/orchestrator/orchestrator-defaults.yaml](skills/orchestrator/orchestrator-defaults.yaml) に置く。
+実行対象プロジェクトの workspace 直下にも同名ファイルがあれば、role と field ごとに共通既定値を上書きする。
+今回の明示指定、プロジェクト設定、共通設定の優先順位はこの順である。
+
+    version: 1
+    roles:
+      planner:
+        model: null
+        reasoning_effort: high
+      coder:
+        model: null
+        reasoning_effort: high
+
+null は対象の起動引数を省略し、各 CLI / native 子の既定値を使う。YAML に default は書けない。
+一回だけハーネス既定値を使いたい場合は、親への指定で model=default または
+reasoning effort=default とする。値は resolve_role_settings.py に workspace と role を渡して解決し、
+設定が無効なら子を起動せず blocked とする。
+
+設定 reader は一般 YAML parser ではなく、UTF-8・64 KiB 以下の限定 YAML v1 だけを受理する。
+version: 1 と roles: を必須とし、role は planner / coder / reviewer、field は model /
+reasoning_effort、字下げと canonical order を固定する。コメント、引用符、Unicode、tab、CR、空行、末尾空白、
+未知・重複・順序外 key は拒否する。設定候補は symlink・directory・FIFO 等を拒否し、通常ファイルだけを安全に読む。
+
 呼び出し方式は既定で `auto` とし、同一ハーネスで利用可能な場合は標準サブエージェント（native）、別ハーネスや独立した設定が必要な場合は外部呼び出し（external）を使う。
 親セッションの公開ツールで利用可否を確認し、[select_route.py](skills/orchestrator/scripts/select_route.py) で選択する。
 このツールは方式を決めるだけで、エージェントの起動や能力の自動検出は行わない。
@@ -227,6 +253,23 @@ hook のソースは [`claude-code/hooks/circuit-breaker.py`](claude-code/hooks/
 `external_runner.py run --harness claude --role reviewer --access read-only` で `tests/fixtures/smoke-request.md` を投入し、
 `status: completed`（exit_code=0、denied_actions なし）、response.md に `status: approved` と `HARNESS_SMOKE_OK` を確認した。
 これで3ハーネスすべての外部CLI経路の疎通が確認できた。
+
+#### Codex から Claude を起動すると `Not logged in` になる場合
+
+2026-09-11: 同じ Claude CLI・同じ planner 診断入力で、Codex のサンドボックス内では
+`Not logged in · Please run /login`（exit_code=1）、承認を受けてサンドボックス外で実行すると
+`status: completed`（exit_code=0）と `CLAUDE_PLANNER_SMOKE_OK` が返ることを確認した。
+`claude auth status` も内側では `loggedIn: false`、外側では `loggedIn: true` となった。
+この環境ではサンドボックスによる認証情報の参照制限が原因と考えられる。
+認証情報の保存先や、どの OS アクセス制御が拒否したかまでは特定していない。
+
+- まず失敗した起動環境で `claude auth status` を確認する。出力にはアカウント情報が含まれるため、共有時は伏せる。
+- 通常のターミナルなどサンドボックス外の結果と比較する。外側だけログイン済みなら、再ログインではなく実行環境を見直す。
+- Codex では必要な承認を受けて `external_runner.py run ... --harness claude --role planner` 自体をサンドボックス外で実行する。子は親の制限を継承するため、Claude 側の `--permission-mode` の変更では解決しない。
+- agent-shell / ACP 経由で承認付きの外部実行が利用できない場合は、認証済みのターミナルからランナーを実行する。今回の比較は Codex のコマンド実行経路によるもので、agent-shell / ACP 経路全体の再検証ではない。
+
+ランナーによる自動的な権限昇格、認証情報のコピー、権限制御の無効化は行わない。
+今回の接続確認は起動と計画の回答返却のみで、Issue 操作・実装・PR 作成は対象外。
 
 `tests/fixtures/smoke-request.md` は変更操作なしの計画レビュー用の入力。
 CLI ランナーの正常系・JSONエラー・空回答・タイムアウト・取消・排他・終了時競合は偽CLIによる自動テストで検証している。

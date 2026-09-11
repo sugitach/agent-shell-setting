@@ -146,6 +146,16 @@ class RunnerTest(unittest.TestCase):
                 self.assertIn("--effort", command)
                 self.assertIn("high", command)
 
+    def test_none_model_and_reasoning_effort_are_omitted_per_harness(self):
+        for harness in ("codex", "claude", "agy"):
+            with self.subTest(harness=harness):
+                command = runner.command_for(
+                    harness, harness, self.workspace, self.workspace / "job",
+                    "workspace-write", None, 5, None)
+                self.assertNotIn("--model", command)
+                self.assertNotIn("--effort", command)
+                self.assertNotIn('model_reasoning_effort=', " ".join(command))
+
     def test_agy_rejects_unsupported_reasoning_effort(self):
         with self.assertRaisesRegex(ValueError, "agy"):
             runner.command_for("agy", "agy", self.workspace, self.workspace / "job",
