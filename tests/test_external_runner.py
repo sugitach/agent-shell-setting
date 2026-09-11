@@ -57,6 +57,17 @@ class RunnerTest(unittest.TestCase):
         self.assertIn("# Reviewer", (job / "request.md").read_text())
         self.assertEqual(state["transport"], "external")
 
+    def test_model_and_reasoning_effort_are_passed_to_each_harness(self):
+        for harness in ("codex", "claude", "agy"):
+            with self.subTest(harness=harness):
+                command = runner.command_for(
+                    harness, harness, self.workspace, self.workspace / "job",
+                    "workspace-write", "test-model", 5, "high")
+                self.assertIn("--model", command)
+                self.assertIn("test-model", command)
+                self.assertIn("--effort", command)
+                self.assertIn("high", command)
+
     def test_claude_json_error_is_not_success(self):
         self.prompt.write_text("JSON_ERROR")
         result = self.run_job("claude")
@@ -80,6 +91,38 @@ class RunnerTest(unittest.TestCase):
                                 env=self.env, capture_output=True, text=True, timeout=8)
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.state()[0]["status"], "unknown")
+
+    def test_agy_cooperative_timeout_is_confirmed(self):
+        self.prompt.write_text("COOPERATIVE")
+        result = subprocess.run(self.command("agy", "0.3") + ["--access", "workspace-write", "--cancel-grace", "0.3"],
+                                env=self.env, capture_output=True, text=True, timeout=8)
+        self.assertNotEqual(result.returncode, 0)
+        state, _ = self.state()
+        self.assertEqual(state["status"], "timed_out")
+        self.assertTrue(state["stop_confirmed"])
+        self.assertEqual(state["conversation_id"], "fake-agy")
+        self.assertEqual(state["harness_status"], "INTERRUPTED")
+
+    def test_agy_wrong_conversation_cannot_confirm_stop(self):
+        self.prompt.write_text("COOPERATIVE WRONG_ID")
+        result = subprocess.run(self.command("agy", "0.3") + ["--access", "workspace-write", "--cancel-grace", "0.3"],
+                                env=self.env, capture_output=True, text=True, timeout=8)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.state()[0]["status"], "unknown")
+
+    def test_agy_structured_error_is_not_success(self):
+        self.prompt.write_text("JSON_ERROR")
+        result = subprocess.run(self.command("agy") + ["--access", "workspace-write"],
+                                env=self.env, capture_output=True, text=True, timeout=8)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.state()[0]["status"], "failed")
+
+    def test_agy_denied_action_is_not_success(self):
+        self.prompt.write_text("DENIED")
+        result = subprocess.run(self.command("agy") + ["--access", "workspace-write"],
+                                env=self.env, capture_output=True, text=True, timeout=8)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.state()[0]["status"], "failed")
 
     def test_parent_blocked_rejects_launch(self):
         task = self.workspace / ".orchestration/task-1"
@@ -137,7 +180,7 @@ class RunnerTest(unittest.TestCase):
     def direct_args(self):
         return type("Args", (), dict(workspace=self.workspace, task_id="task-1", harness="codex",
                                     role="reviewer", prompt_file=self.prompt, timeout=5,
-                                    access="read-only", model=None))()
+                                    access="read-only", model=None, reasoning_effort=None))()
 
     def test_interrupt_during_cleanup_is_not_success(self):
         import signal

@@ -17,7 +17,84 @@ from pathlib import Path
 
 
 SKILLS = Path(__file__).resolve().parents[2]
-ACTIVE = {"starting", "running", "unknown"}
+ACTIVE = {"starting", "running", "stopping", "unknown"}
+
+
+class AgyStream:
+    """NDJSONを差分読み込みし、同一会話の終了結果だけを採用する。"""
+
+    def __init__(self, path):
+        self.path = path
+        self.offset = 0
+        self.conversation_id = None
+        self.result = None
+        self.error = None
+        self.last_event = None
+
+    def read(self, final=False):
+        previous = self.offset
+        with self.path.open("rb") as source:
+            source.seek(self.offset)
+            while True:
+                line = source.readline(1024 * 1024 + 1)
+                if not line:
+                    break
+                if len(line) > 1024 * 1024:
+                    raise ValueError("agy のイベントが上限1MiBを超えました")
+                if not line.endswith(b"\n") and not final:
+                    break
+                self.offset = source.tell()
+                try:
+                    event = json.loads(line)
+                    if not isinstance(event, dict):
+                        raise ValueError("イベントがオブジェクトではありません")
+                    if self.result is not None:
+                        raise ValueError("最終結果の後に追加イベントがあります")
+                    name = event.get("event")
+                    self.last_event = name
+                    if name == "init":
+                        identity = event.get("conversation_id")
+                        if self.conversation_id is not None or not isinstance(identity, str) or not identity:
+                            raise ValueError("init の会話IDが不正または重複しています")
+                        self.conversation_id = identity
+                    elif name in {"step_update", "result"}:
+                        payload = event.get(name)
+                        if not isinstance(payload, dict) or not self.conversation_id or payload.get("conversation_id") != self.conversation_id:
+                            raise ValueError("会話IDが init と一致しません")
+                        if name == "result":
+                            self.result = payload
+                except (ValueError, UnicodeDecodeError) as error:
+                    self.error = str(error)
+        return self.offset != previous
+
+    def finish(self, job, state):
+        self.read(final=True)
+        state["conversation_id"] = self.conversation_id
+        state["stop_confirmed"] = False
+        if self.error or self.result is None:
+            state.update(status="unknown", error=self.error or "agy の最終結果がありません")
+            return
+        outcome = self.result.get("status")
+        state["harness_status"] = outcome
+        write_json(job / "harness-result.json", self.result)
+        response = self.result.get("response", "")
+        if isinstance(response, str):
+            (job / "response.md").write_text(response)
+        if state.get("stop_escalated") or outcome not in {"SUCCESS", "ERROR", "CANCELED", "INTERRUPTED"}:
+            state.update(status="unknown", error="agy の終了状態を確認できません")
+            return
+        state["stop_confirmed"] = True
+        if self.result.get("denied_actions"):
+            state["denied_actions"] = self.result["denied_actions"]
+        requested = state.get("stop_requested")
+        if requested:
+            state["status"] = requested
+        elif outcome in {"CANCELED", "INTERRUPTED"}:
+            state["status"] = "cancelled"
+        elif outcome == "SUCCESS" and state["exit_code"] == 0 and isinstance(response, str) and response.strip() and not self.result.get("denied_actions"):
+            state["status"] = "completed"
+        else:
+            state.update(status="failed", error=self.result.get("error") or "agy の結果が成功条件を満たしません")
 
 
 def write_json(path, value):
@@ -39,13 +116,16 @@ def task_lock(task):
             fcntl.flock(lock, fcntl.LOCK_UN)
 
 
-def command_for(harness, executable, workspace, job, access, model, timeout):
+def command_for(harness, executable, workspace, job, access, model, timeout,
+                reasoning_effort=None):
     if harness == "codex":
         command = [executable, "exec", "--json", "--color", "never", "--cd", str(workspace),
                    "--sandbox", access, "-c", 'approval_policy="never"',
                    "--output-last-message", str(job / "response.md")]
         if model:
             command += ["--model", model]
+        if reasoning_effort:
+            command += ["--effort", reasoning_effort]
         return command + ["-"]
     if harness == "claude":
         command = [executable, "--print", "--output-format", "json",
@@ -55,14 +135,20 @@ def command_for(harness, executable, workspace, job, access, model, timeout):
             command += ["--tools", "Read,Glob,Grep"]
         if model:
             command += ["--model", model]
+        if reasoning_effort:
+            command += ["--effort", reasoning_effort]
         return command
     # agy の sandbox は read-only と同義ではないため明示的に区別する。
     if access == "read-only":
         raise ValueError("agy CLI に read-only 強制オプションを確認できません。workspace-write の明示が必要です")
-    command = [executable, "--sandbox", "--print-timeout", f"{max(1, int(timeout))}s"]
+    # 内部タイムアウトより先に親がSIGINTを送り、結果を読み取る時間を確保する。
+    command = [executable, "--sandbox", "--input-format", "stream-json", "--output-format", "stream-json",
+               "--print-timeout", f"{int(timeout) + 120}s"]
     if model:
         command += ["--model", model]
-    return command + ["--print", f"Read {job / 'request.md'} and perform only the delegated task described there."]
+    if reasoning_effort:
+        command += ["--effort", reasoning_effort]
+    return command
 
 
 def stop_group(process):
@@ -88,6 +174,22 @@ def stop_group(process):
     process.wait()
 
 
+def interrupt_agy(process, grace, poll_stream):
+    """SIGINTに対する応答と終了を待ち、強制停止の有無を返す。"""
+    try:
+        os.killpg(process.pid, signal.SIGINT)
+    except ProcessLookupError:
+        process.wait()
+        return False
+    deadline = time.monotonic() + grace
+    while process.poll() is None and time.monotonic() < deadline:
+        poll_stream()
+        time.sleep(0.05)
+    escalated = process.poll() is None
+    stop_group(process)
+    return escalated
+
+
 def collect_result(harness, job):
     if harness == "claude":
         result = json.loads((job / "stdout.log").read_text())
@@ -99,8 +201,6 @@ def collect_result(harness, job):
         if not isinstance(response, str):
             raise ValueError("Claude の result が文字列ではありません")
         (job / "response.md").write_text(response)
-    elif harness == "agy":
-        shutil.copyfile(job / "stdout.log", job / "response.md")
     if not (job / "response.md").is_file() or not (job / "response.md").read_text().strip():
         raise ValueError("最終回答がありません")
 
@@ -111,6 +211,9 @@ def run(args):
         raise ValueError("workspace または task-id が不正です")
     if not 0 < args.timeout <= 86400:
         raise ValueError("timeout は0秒より大きく86400秒以下で指定してください")
+    grace = getattr(args, "cancel_grace", 5)
+    if not 0 < grace <= 60:
+        raise ValueError("cancel-grace は0秒より大きく60秒以下で指定してください")
     prompt = args.prompt_file.read_text()
     role_skill = SKILLS / args.role / "SKILL.md"
     role_text = role_skill.read_text()
@@ -135,16 +238,23 @@ def run(args):
         job = task / "jobs" / uuid.uuid4().hex
         # 引数の検証はジョブ作成前に終える。
         command = command_for(args.harness, executable, workspace, job,
-                              args.access, args.model, args.timeout)
+                              args.access, args.model, args.timeout,
+                              args.reasoning_effort)
         job.mkdir(mode=0o700)
         (job / "request.md").write_text(
             f"あなたは子セッションです。task_id={args.task_id}, role={args.role}。再委任は禁止。\n"
             "以下の担当スキルに従い、最後の回答に担当の結果を返してください。\n"
             "親の役割を引き受けず、commit/push/PR作成は行わないでください。\n\n"
             + role_text + "\n\n## 親からの依頼\n\n" + prompt)
+        input_path = job / "request.md"
+        if args.harness == "agy":
+            input_path = job / "input.jsonl"
+            input_path.write_text(json.dumps({"event": "user", "message": {
+                "content": (job / "request.md").read_text()}}, ensure_ascii=False) + "\n")
         state = {"job": str(job), "task_id": args.task_id, "role": args.role,
                  "harness": args.harness, "transport": "external", "status": "starting",
                  "workspace": str(workspace), "access": args.access,
+                 "model": args.model, "reasoning_effort": args.reasoning_effort,
                  "runner_pid": os.getpid(), "child_pid": None,
                  "started_at": time.time(), "exit_code": None}
         write_json(job / "state.json", state)
@@ -158,18 +268,29 @@ def run(args):
         handlers = {sig: signal.signal(sig, interrupt) for sig in (signal.SIGTERM, signal.SIGINT)}
         process = None
         cleaned_up = False
+        stream = None
+
+        def poll_stream():
+            if stream is not None and stream.read():
+                state.update(conversation_id=stream.conversation_id, last_event=stream.last_event,
+                             last_event_at=time.time())
+                write_json(job / "state.json", state)
+
         try:
-            with (job / "request.md").open() as request, (job / "stdout.log").open("w") as out, (job / "stderr.log").open("w") as err:
+            with input_path.open() as request, (job / "stdout.log").open("w") as out, (job / "stderr.log").open("w") as err:
+                if args.harness == "agy":
+                    stream = AgyStream(job / "stdout.log")
                 if interrupted or (job / "cancel.request").exists():
                     state["status"] = "cancelled"
                 else:
                     process = subprocess.Popen(command, cwd=workspace,
-                                               stdin=request if args.harness != "agy" else subprocess.DEVNULL,
+                                               stdin=request,
                                                stdout=out, stderr=err, start_new_session=True)
                     state.update(status="running", child_pid=process.pid)
                     write_json(job / "state.json", state)
                     deadline = time.monotonic() + args.timeout
                     while process.poll() is None:
+                        poll_stream()
                         if interrupted or (job / "cancel.request").exists():
                             state["status"] = "cancelled"
                             break
@@ -177,29 +298,38 @@ def run(args):
                             state["status"] = "timed_out"
                             break
                         time.sleep(0.05)
-                    # 正常終了でも残った同一グループの子プロセスを回収する。
-                    stop_group(process)
+                    if stream is not None and state["status"] in {"cancelled", "timed_out"}:
+                        state["stop_requested"] = state["status"]
+                        state["status"] = "stopping"
+                        write_json(job / "state.json", state)
+                        state["stop_escalated"] = interrupt_agy(process, grace, poll_stream)
+                    else:
+                        # 正常終了でも残った同一グループの子プロセスを回収する。
+                        stop_group(process)
                     cleaned_up = True
                     state["exit_code"] = process.returncode
                     if interrupted or (job / "cancel.request").exists():
                         state["status"] = "cancelled"
-            if state["status"] == "running":
+                        state["stop_requested"] = "cancelled"
+            if stream is not None and process is not None:
+                stream.finish(job, state)
+            elif state["status"] == "running":
                 if process.returncode:
                     raise ValueError(f"CLI が終了コード {process.returncode} を返しました")
                 collect_result(args.harness, job)
                 state["status"] = "completed"
-            elif args.harness == "agy" and process is not None:
-                state.update(status="unknown", error="CLI は停止しましたが agy 本体の停止は未確認です")
         except Exception as error:
             state.update(status="unknown" if args.harness == "agy" and process else "failed", error=str(error))
+            if args.harness == "agy":
+                state["stop_confirmed"] = False
         finally:
             if process is not None and not cleaned_up:
                 try:
                     stop_group(process)
                 except OSError as error:
-                    state.update(status="unknown", error=f"子の停止未確認: {error}")
+                    state.update(status="unknown", stop_confirmed=False, error=f"子の停止未確認: {error}")
             if state["status"] == "completed" and (interrupted or (job / "cancel.request").exists()):
-                state["status"] = "unknown" if args.harness == "agy" else "cancelled"
+                state["status"] = "cancelled"
             state["finished_at"] = time.time()
             write_json(job / "state.json", state)
             for sig, handler in handlers.items():
@@ -213,7 +343,7 @@ def inspect_job(job):
     state = json.loads((job / "state.json").read_text())
     if state.get("job") != str(job):
         raise ValueError("ジョブの保存先とIDが一致しません")
-    if state["status"] in {"starting", "running"}:
+    if state["status"] in {"starting", "running", "stopping"}:
         try:
             with task_lock(job.parent.parent):
                 state.update(status="unknown", error="ランナーのロックがありません。旧子の停止確認が必要です")
@@ -233,7 +363,9 @@ def main():
     execute.add_argument("--prompt-file", type=Path, required=True)
     execute.add_argument("--access", choices=["read-only", "workspace-write"], default="read-only")
     execute.add_argument("--model")
+    execute.add_argument("--reasoning-effort", choices=["low", "medium", "high", "xhigh", "max"])
     execute.add_argument("--timeout", type=float, default=600)
+    execute.add_argument("--cancel-grace", type=float, default=5)
     for name in ("status", "cancel"):
         sub = commands.add_parser(name)
         sub.add_argument("--job", type=Path, required=True)

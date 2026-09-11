@@ -19,9 +19,11 @@ python3 /path/to/skills/orchestrator/scripts/external_runner.py run \
 
 `/path/to/skills` は実際のスキル配置先（Codex は `~/.agents/skills`、Claude は `~/.claude/skills`、agy は `~/.gemini/antigravity-cli/skills` など）に置き換える。
 run はフォアグラウンドで実行する。親の長時間コマンド実行機能で起動し、そのセッションを維持して結果を待つ。起動直後に表示される JSON の job パスを記録する。
-CLI 実行方式は Codex=`exec --json`、Claude=`--print --output-format json`、agy=`--sandbox --print`。
-Codex と Claude は標準入力で依頼を渡す。agy は request.md を読む指示を渡すため、CLI本体がファイルを読める必要がある。
+CLI 実行方式は Codex=`exec --json`、Claude=`--print --output-format json`、agy=`--sandbox --input-format stream-json --output-format stream-json`。
+すべて標準入力で依頼本文を渡す。agy は user イベントを input.jsonl に保存して渡し、依頼ファイルの読み取り権限に依存しない。
 `--model` は明示指定が必要なときだけ渡す。未指定では CLI の既存設定を使う。
+`--reasoning-effort` を指定すると、各 CLI に `--effort` として渡す。指定可能な値は
+`low`、`medium`、`high`、`xhigh`、`max`。利用するハーネスが対応している値を選ぶ。
 
 ## 権限
 
@@ -34,6 +36,7 @@ Codex と Claude は標準入力で依頼を渡す。agy は request.md を読�
 
 保存先は `<workspace>/.orchestration/<task-id>/jobs/<job-id>/`。
 state.json、request.md、stdout.log、stderr.log、response.md を保存する。状態は原子的に置き換え、ジョブディレクトリを他ユーザーへ公開しない。
+agy は input.jsonl と harness-result.json も保存し、state.json に conversation_id、harness_status、stop_confirmed を記録する。
 ログ・会話を自動コミットしない。対象プロジェクトでも `.orchestration/` を管理対象外にするか、成果物だけを明示的に選ぶ。
 
 ```sh
@@ -42,17 +45,21 @@ python3 /path/to/skills/orchestrator/scripts/external_runner.py cancel --job /ab
 ```
 
 cancel は取消要求を記録するだけ。親は status が cancelled / unknown 等になるまで確認する。
-取消・タイムアウト・SIGINT/SIGTERM はランナーが起動したローカルプロセスグループに SIGTERM、猶予後 SIGKILL を送り回収する。
-終了処理中の中断も成功扱いしない。agy は外部サービス側の処理停止が確認できないため、中断・異常終了を unknown として扱う。
+Codex / Claude の取消・タイムアウト・SIGINT/SIGTERM は、起動したローカルプロセスグループに SIGTERM、猶予後 SIGKILL を送り回収する。
+agy は stopping に遷移して SIGINT を送り、`--cancel-grace`（既定5秒、最大60秒）の間、終了応答を待つ。
+init と同じ会話IDの終端 result と CLI 終了が確認でき、強制停止へ移行していなければ stop_confirmed=true とする。result 不在・会話ID不一致・強制停止時は unknown とし、再起動を拒否する。
+終了処理中の中断も成功扱いしない。SUCCESS でも denied_actions または空回答があれば failed とする。
+stop_confirmed はハーネスの終了応答を意味し、切り離されたプロセスや外部サービス内部の全処理停止を保証しない。
 ランナーを SIGKILL すると回収処理を実行できない。ロックが消えても旧 starting/running ジョブがあるタスクの再起動は拒否する。
 状態不明時は子の停止を外部から確認し、根拠を記録して旧ジョブの状態を解決する。確認せず状態を削除・書き換えて再起動しない。
 
 | 状態 | 意味 |
 | --- | --- |
 | starting / running | 起動準備／ローカルCLI実行中 |
+| stopping | agy に取消を送り、終了応答を待機中 |
 | completed | CLI終了と非空の回答取得が完了。レビュー承認・DoD達成とは別 |
 | failed | CLI失敗、構造化エラー、権限拒否、最終回答なし |
-| timed_out / cancelled | ローカルプロセスの停止処理を実行済み |
+| timed_out / cancelled | ローカル停止処理済み。起動済み agy は同一会話の終端結果も確認済み |
 | unknown | 残存処理等の停止確認が必要。再起動不可 |
 
 run の終了コードは completed=0、実行失敗・取消等=1、事前条件不備=2。
