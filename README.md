@@ -55,12 +55,23 @@ Claude の settings は確認済みの既存設定全体（theme・enabledPlugin
 * **ロールバックファースト**: 失敗した修正はクリーンに戻し、パッチの上にパッチを重ねない。
 * **トークン節約**: コマンド出力ログは `grep` / `head` / `tail` で行数を絞る。
 
-### ② 実行権限・確認ルール
+### ② トークン・コンテキストの予算管理
+長時間セッションでは、同じ資料の再読込や広すぎるログの確認が入力トークンを急増させるため、次の制約を共通ルールとします。
+
+* 作業開始時に目的・対象・完了条件を短く定め、不要な探索や説明を省く。
+* ファイルとログは必要箇所だけ読み、既読内容は要約して再利用する。同じ確認を根拠なく繰り返さない。
+* 独立した確認はまとめて実行し、待機・ポーリングには上限を設ける。
+* サブエージェント、外部ハーネス、大規模調査は小さな作業では使わず、効果が明確な場合に限る。
+* コンテキスト使用率が 60% を超えたら探索範囲を狭め、70% を超えたら広範な探索・委任を止めて、現状と残作業を要約する。
+* 長い出力は全文を会話へ渡さず、失敗箇所や必要な先頭・末尾だけを抽出する。
+* 各操作の目的を確認し、結果に結びつかない操作は実行しない。
+
+### ③ 実行権限・確認ルール
 * **カレントディレクトリ以下**: 非破壊的操作（作成、編集、閲覧、テスト実行等）は **事前確認不要**。破壊的操作（ハードリセット、重要ディレクトリ削除等）は要確認。
 * **カレントディレクトリ外**: ファイル操作・コマンド実行は **すべて事前確認が必要**。
 * **サンドボックス環境**: ネットワーク通信を除き、**すべて事前確認不要**。
 
-### ③ コミュニケーション方針
+### ④ コミュニケーション方針
 * **言語**: 例外なく日本語で回答（英語指示に対しても日本語応答）。
 * **呼称・トーン**: 一人称「私」、二人称「あなた」。親しい同僚のように適度にフランクかつプロフェッショナル。
 * **謝罪抑制**: 謝罪は簡潔に1回のみ。繰り返さず問題解決を最優先する。
@@ -158,3 +169,71 @@ claude-code/hooks/circuit-breaker.py => ~/.claude/hooks/circuit-breaker.py
 4. ユーザーが「サーキットブレーカー解除」または `circuit breaker reset` と明示すると、`UserPromptSubmit` hook がそのセッションの停止状態を解除する。
 
 hook のソースは [`claude-code/hooks/circuit-breaker.py`](claude-code/hooks/circuit-breaker.py) に保管し、実行用のコピーを `~/.claude/hooks/` に配置する。スクリプトを更新した場合は実行用コピーも同期する。
+
+## 8. 4役の開発スキル
+
+| スキル原本 | 担当 |
+| --- | --- |
+| [orchestrator](skills/orchestrator/SKILL.md) | 唯一の親。委任・ブランチ・コミット・push・PR・CI・停止と再開を管理 |
+| [planner](skills/planner/SKILL.md) | Issue の作成・確認、要件・DoD・coder の実装計画 |
+| [coder](skills/coder/SKILL.md) | 承認済み計画に従った TDD（Red → Green）と実装 |
+| [reviewer](skills/reviewer/SKILL.md) | 計画・実装をレビューし approved / changes_requested / blocked を返す |
+
+これらは Codex・Claude Code・agy のスキル配置先へ同じ内容でコピーする。
+既存の github-tdd-workflow は単独実行用として残し、役割が指定された場合は担当工程だけを適用する。
+
+```text
+親 → planner → reviewer(plan) → coder → reviewer(implementation)
+    → 親が commit / push / PR → CI → 完了
+```
+
+指摘があれば担当へ戻す。CI 失敗が仕様・設計に関わる場合は planner、実装・テスト・ビルドの不備なら coder に戻す。
+修正後は再レビューし、最新 PR head の CI 成功を確認する。環境障害・権限不足には根拠なくコード変更を行わない。
+親も子もハーネスは固定しない。既定は planner=claude、coder=codex、reviewer=agy で、依頼時に上書きできる。
+各役割には model と reasoning effort も個別指定できる。未指定ならハーネス既定値を使い、対象ハーネスが受け付けない指定は黙って変更せず blocked とする。
+
+親への依頼例:
+
+> orchestrator スキルで Issue #123 を進めて。planner=claude、coder=codex、reviewer=agy。coder は model=gpt-5、reasoning effort=high。
+
+親が子を呼ぶ際には、担当スキル、Issue、計画版、作業範囲、成果物の返却先を渡す。
+状態と引き継ぎの形式は [handoff.md](skills/orchestrator/references/handoff.md) を参照。
+
+呼び出し方式は既定で `auto` とし、同一ハーネスで利用可能な場合は標準サブエージェント（native）、別ハーネスや独立した設定が必要な場合は外部呼び出し（external）を使う。
+親セッションの公開ツールで利用可否を確認し、[select_route.py](skills/orchestrator/scripts/select_route.py) で選択する。
+このツールは方式を決めるだけで、エージェントの起動や能力の自動検出は行わない。
+利用不能時のフォールバックも同じ対象ハーネスに限り、旧子の停止を確認するまで再起動しない。
+詳しい選択条件は [routing.md](skills/orchestrator/references/routing.md) に記載。
+
+### 実装済みの範囲と次の接続作業
+
+スキル・共有ルール・方式選択ツール・外部CLIランナー・配布は実装済み。
+外部実行は [external_runner.py](skills/orchestrator/scripts/external_runner.py) の run / status / cancel を使う。
+起動方法、結果の読み方、権限、停止の制約は [external-runner.md](skills/orchestrator/references/external-runner.md) を参照。
+同じタスクの外部起動は排他し、親が blocked の場合や未解決の旧ジョブがある場合は起動を拒否する。
+親の単一起動ロック、native と external をまたぐ排他、修正回数の自動判定・強制は未実装。
+現時点の横断的な停止・回数引き継ぎはスキルの指示であり、Claude の既存 hook は従来どおりセッション単位で動作する。
+既存 hook は意図した TDD Red でもツール失敗なら記録するため、実運用前に TDD と停止判定の整合性を検証する必要がある。
+2026-09-10 の接続確認結果:
+
+| 接続 | 結果 |
+| --- | --- |
+| 現在の Codex セッション → 標準サブエージェント | 起動・結果返却・追加依頼を確認。実装レビューにも使用 |
+| 外部 Codex CLI | 担当 skill を渡し、`approved / HARNESS_SMOKE_OK` を取得 |
+| 外部 agy CLI | request.md を読んで `approved / HARNESS_SMOKE_OK` を取得 |
+| 外部 Claude CLI | 未契約のため、ユーザー指定で実機検証を保留 |
+
+2026-09-11: Claude アカウント接続後、保留していた外部 Claude CLI の実機検証を実施。
+`external_runner.py run --harness claude --role reviewer --access read-only` で `tests/fixtures/smoke-request.md` を投入し、
+`status: completed`（exit_code=0、denied_actions なし）、response.md に `status: approved` と `HARNESS_SMOKE_OK` を確認した。
+これで3ハーネスすべての外部CLI経路の疎通が確認できた。
+
+`tests/fixtures/smoke-request.md` は変更操作なしの計画レビュー用の入力。
+CLI ランナーの正常系・JSONエラー・空回答・タイムアウト・取消・排他・終了時競合は偽CLIによる自動テストで検証している。
+実行ログは `.orchestration/` に保存し、Git 対象外とする。
+別の ACP アダプタ／起動環境での標準サブエージェント利用可否、および3ハーネスでの実装→PR→CIの一連の実運用は未検証。
+2026-09-11: agy を標準入力・出力の stream-json に変更。取消後、同じ会話IDの `ERROR / interrupted` と CLI 終了を強制停止なしで確認した。
+これはハーネスの終了応答の確認であり、外部サービス内部の全処理停止の保証ではない。終端結果がない場合や強制停止が必要な場合は unknown として再起動を拒否する。
+実機取消検証は `python3 tests/probe_agy_cancel.py --task-id <未使用ID>` で実行できる（agy の認証・通信が必要）。
+
+この設定リポジトリにはリモートがないため、今回のスキル作成はローカルブランチで管理し、Issue・PR・CI は作成・実行していない。
