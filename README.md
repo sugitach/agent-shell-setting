@@ -223,6 +223,11 @@ hook のソースは [`claude-code/hooks/circuit-breaker.py`](claude-code/hooks/
 | 外部 agy CLI | request.md を読んで `approved / HARNESS_SMOKE_OK` を取得 |
 | 外部 Claude CLI | 未契約のため、ユーザー指定で実機検証を保留 |
 
+2026-09-11: Claude アカウント接続後、保留していた外部 Claude CLI の実機検証を実施。
+`external_runner.py run --harness claude --role reviewer --access read-only` で `tests/fixtures/smoke-request.md` を投入し、
+`status: completed`（exit_code=0、denied_actions なし）、response.md に `status: approved` と `HARNESS_SMOKE_OK` を確認した。
+これで3ハーネスすべての外部CLI経路の疎通が確認できた。
+
 `tests/fixtures/smoke-request.md` は変更操作なしの計画レビュー用の入力。
 CLI ランナーの正常系・JSONエラー・空回答・タイムアウト・取消・排他・終了時競合は偽CLIによる自動テストで検証している。
 実行ログは `.orchestration/` に保存し、Git 対象外とする。
