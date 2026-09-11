@@ -191,8 +191,11 @@ hook のソースは [`claude-code/hooks/circuit-breaker.py`](claude-code/hooks/
 修正後は再レビューし、最新 PR head の CI 成功を確認する。環境障害・権限不足には根拠なくコード変更を行わない。
 親も子もハーネスは固定しない。既定は planner=claude、coder=codex、reviewer=agy で、依頼時に上書きできる。
 各役割には model と reasoning effort も個別指定できる。明示指定がなければプロジェクト・共通設定から解決し、null のときはハーネス既定値を使う。対象ハーネスが受け付けない指定は黙って変更せず blocked とする。
-タスク state では roles.<role> に harness、model、reasoning_effort、各値の source をまとめて保存する。
-この統合レコードを route 選択と子の起動で共用し、top-level role_settings は新規 state に保存しない。
+タスク開始時に全 role を一度だけ解決し、state の roles.<role> に harness、model、reasoning_effort、各値の
+source を固定して保存する。この統合レコードを route 選択と子の起動で共用し、top-level role_settings は
+新規 state に保存しない。通常継続はこの snapshot だけを使うため、プロジェクト YAML の途中編集は既存 task に
+影響しない。設定を変えるには、ユーザーが明示 resume を指示し、稼働中の子がないことを確認して全 role を
+再解決する。旧新値と理由は state の role_settings_history に残す。
 
 親への依頼例:
 
@@ -211,9 +214,11 @@ orchestrator の共通既定値は
     version: 1
     roles:
       planner:
+        harness: claude
         model: null
         reasoning_effort: high
       coder:
+        harness: codex
         model: null
         reasoning_effort: high
 
@@ -221,11 +226,14 @@ null は対象の起動引数を省略し、各 CLI / native 子の既定値を�
 一回だけハーネス既定値を使いたい場合は、親への指定で model=default または
 reasoning effort=default とする。値は resolve_role_settings.py に workspace と role を渡して解決し、
 設定が無効なら子を起動せず blocked とする。
-プロジェクト YAML は model と reasoning_effort だけを上書きでき、harness の割当は変更できない。
+プロジェクト YAML は harness、model、reasoning_effort を field ごとに上書きできる。
+non-null model は構文と CLI 引数への変換だけを起動前に検証する。モデルの実在性やアカウント権限は
+安定したオフライン API で確認できないため、子 CLI の起動時エラーとして記録する。
 
 設定 reader は一般 YAML parser ではなく、UTF-8・64 KiB 以下の限定 YAML v1 だけを受理する。
-version: 1 と roles: を必須とし、role は planner / coder / reviewer、field は model /
-reasoning_effort、字下げと canonical order を固定する。コメント、引用符、Unicode、tab、CR、空行、末尾空白、
+version: 1 と roles: を必須とし、role は planner / coder / reviewer、field は harness / model /
+reasoning_effort をこの canonical order で置く。harness は codex / claude / agy だけを受理し、null と default は使えない。
+agy の reasoning_effort は low / medium / high だけを受理する。コメント、引用符、Unicode、tab、CR、空行、末尾空白、
 未知・重複・順序外 key は拒否する。設定候補は symlink・directory・FIFO 等を拒否し、通常ファイルだけを安全に読む。
 
 呼び出し方式は既定で `auto` とし、同一ハーネスで利用可能な場合は標準サブエージェント（native）、別ハーネスや独立した設定が必要な場合は外部呼び出し（external）を使う。

@@ -12,7 +12,8 @@ from pathlib import Path
 
 MAX_BYTES = 64 * 1024
 ROLES = ("planner", "coder", "reviewer")
-FIELDS = ("model", "reasoning_effort")
+FIELDS = ("harness", "model", "reasoning_effort")
+HARNESSES = {"codex", "claude", "agy"}
 EFFORTS = {"low", "medium", "high", "xhigh", "max"}
 MODEL_RE = re.compile(r"[A-Za-z0-9][-A-Za-z0-9._/]{0,127}\Z")
 PROJECT_BASENAME = "orchestrator-defaults.yaml"
@@ -110,7 +111,7 @@ def parse_yaml(data, path, shared):
             last_role = index
             last_field = -1
             continue
-        field_match = re.fullmatch(r"    (model|reasoning_effort): ([A-Za-z0-9][-A-Za-z0-9._/]{0,127}|null)", line)
+        field_match = re.fullmatch(r"    (harness|model|reasoning_effort): ([A-Za-z0-9][-A-Za-z0-9._/]{0,127}|null)", line)
         if field_match and stage == 2 and current_role is not None:
             field, value = field_match.groups()
             index = FIELDS.index(field)
@@ -118,6 +119,8 @@ def parse_yaml(data, path, shared):
                 fail(f"field の順序または重複が不正です: {path}:{number}")
             if value == "default":
                 fail(f"YAML の default は使えません: {path}:{number}")
+            if field == "harness" and value not in HARNESSES:
+                fail(f"harness が不正です: {path}:{number}")
             if field == "reasoning_effort" and value not in EFFORTS | {"null"}:
                 fail(f"reasoning_effort が不正です: {path}:{number}")
             result[current_role][field] = None if value == "null" else value
@@ -129,7 +132,7 @@ def parse_yaml(data, path, shared):
         fail(f"version: 1 と roles: が必要です: {path}")
     if shared:
         if tuple(result) != ROLES or any(tuple(result[role]) != FIELDS for role in ROLES):
-            fail(f"共通設定には全 role と model / reasoning_effort が必要です: {path}")
+            fail(f"共通設定には全 role と harness / model / reasoning_effort が必要です: {path}")
     elif not result or not any(fields for fields in result.values()):
         fail(f"プロジェクト設定には少なくとも一つの role と field が必要です: {path}")
     return result
@@ -152,7 +155,7 @@ def explicit_model(value):
         return UNSET
     if value == "default":
         return None
-    if not MODEL_RE.fullmatch(value) or value == "default":
+    if not isinstance(value, str) or not MODEL_RE.fullmatch(value) or value == "default":
         fail("model が不正です")
     return value
 
@@ -162,12 +165,20 @@ def explicit_effort(value):
         return UNSET
     if value == "default":
         return None
-    if value not in EFFORTS:
+    if not isinstance(value, str) or value not in EFFORTS:
         fail("reasoning-effort が不正です")
     return value
 
 
-def resolve_settings(workspace, role, model=UNSET, reasoning_effort=UNSET):
+def explicit_harness(value):
+    if value is UNSET:
+        return UNSET
+    if not isinstance(value, str) or value not in HARNESSES:
+        fail("harness が不正です")
+    return value
+
+
+def resolve_settings(workspace, role, model=UNSET, reasoning_effort=UNSET, *, harness=UNSET):
     if role not in ROLES:
         fail("role が不正です")
     workspace = checked_workspace(workspace)
@@ -177,6 +188,7 @@ def resolve_settings(workspace, role, model=UNSET, reasoning_effort=UNSET):
     project_data = regular_file_bytes(project_path, required=False)
     project = parse_yaml(project_data, project_path, shared=False) if project_data is not None else {}
     explicit = {
+        "harness": explicit_harness(harness),
         "model": explicit_model(model),
         "reasoning_effort": explicit_effort(reasoning_effort),
     }
@@ -192,6 +204,9 @@ def resolve_settings(workspace, role, model=UNSET, reasoning_effort=UNSET):
         else:
             settings[field] = shared[role][field]
             sources[field] = "shared"
+    allowed_efforts = {"low", "medium", "high"} if settings["harness"] == "agy" else EFFORTS
+    if settings["reasoning_effort"] is not None and settings["reasoning_effort"] not in allowed_efforts:
+        fail(f"{settings['harness']} の reasoning-effort が不正です")
     return {
         "role": role,
         "settings": settings,
@@ -204,11 +219,13 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workspace", type=Path, required=True)
     parser.add_argument("--role", choices=ROLES, required=True)
+    parser.add_argument("--harness", choices=sorted(HARNESSES))
     parser.add_argument("--model", default=UNSET)
     parser.add_argument("--reasoning-effort", default=UNSET)
     args = parser.parse_args(argv)
     try:
-        result = resolve_settings(args.workspace, args.role, args.model, args.reasoning_effort)
+        result = resolve_settings(args.workspace, args.role, args.model, args.reasoning_effort,
+                                  harness=args.harness if args.harness is not None else UNSET)
     except (OSError, ValueError) as error:
         print(str(error), file=sys.stderr)
         return 2

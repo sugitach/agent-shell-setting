@@ -22,8 +22,9 @@ run はフォアグラウンドで実行する。親の長時間コマンド実�
 CLI 実行方式は Codex=`exec --json`、Claude=`--print --output-format json`、agy=`--sandbox --input-format stream-json --output-format stream-json`。
 すべて標準入力で依頼本文を渡す。agy は user イベントを input.jsonl に保存して渡し、依頼ファイルの読み取り権限に依存しない。
 resolve_role_settings.py が共通・プロジェクト・明示指定から role ごとの既定値を解決する。
-親は roles.<role> の統合レコードから harness と解決値を取り出して渡す。external_runner.py は
-設定ファイルや親 state を読まず、解決済みの non-null 値だけを CLI 引数に変換する。
+親は task_role_state.py が開始時に固定した roles.<role> の統合レコードから harness と解決値を
+取り出して渡す。通常継続では YAML を再読込しない。external_runner.py は設定ファイルや親 state を読まず、
+解決済みの non-null 値だけを CLI 引数に変換する。
 model が null なら --model を付けず、reasoning effort が null なら effort 用の引数を付けないため、CLI の既定値を使う。
 --reasoning-effort は low、medium、high、xhigh、max を受け付ける。
 Codex は `-c model_reasoning_effort="…"`、Claude は `--effort` に変換する。agy は `--effort` を使うが、対応値は `low`、`medium`、`high` だけなので、それ以外は起動前に拒否する。

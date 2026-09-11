@@ -1,11 +1,14 @@
 version: 1
 roles:
   planner:
+    harness: claude
     model: null
     reasoning_effort: high
   coder:
+    harness: codex
     model: null
     reasoning_effort: high
   reviewer:
+    harness: agy
     model: null
     reasoning_effort: high

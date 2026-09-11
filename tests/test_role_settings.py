@@ -25,12 +25,15 @@ def load_resolver():
 SHARED = """version: 1
 roles:
   planner:
+    harness: claude
     model: null
     reasoning_effort: high
   coder:
+    harness: codex
     model: gpt-shared
     reasoning_effort: medium
   reviewer:
+    harness: agy
     model: review-model
     reasoning_effort: low
 """
@@ -47,12 +50,13 @@ class RoleSettingsTest(unittest.TestCase):
         self.shared.write_text(SHARED)
         self.resolver = load_resolver()
 
-    def resolve(self, role="planner", model=None, effort=None):
+    def resolve(self, role="planner", model=None, effort=None, harness=None):
         model_arg = self.resolver.UNSET if model is None else model
         effort_arg = self.resolver.UNSET if effort is None else effort
+        harness_arg = self.resolver.UNSET if harness is None else harness
         with mock.patch.object(self.resolver, "SHARED_DEFAULTS", self.shared):
             return self.resolver.resolve_settings(
-                self.workspace, role, model_arg, effort_arg)
+                self.workspace, role, model_arg, effort_arg, harness=harness_arg)
 
     def write_project(self, content):
         (self.workspace / "orchestrator-defaults.yaml").write_text(content)
@@ -60,45 +64,48 @@ class RoleSettingsTest(unittest.TestCase):
     def test_shared_defaults_include_null_model_and_sources(self):
         result = self.resolve()
         self.assertEqual(result["role"], "planner")
-        self.assertEqual(result["settings"], {"model": None, "reasoning_effort": "high"})
-        self.assertEqual(result["sources"], {"model": "shared", "reasoning_effort": "shared"})
+        self.assertEqual(result["settings"], {"harness": "claude", "model": None, "reasoning_effort": "high"})
+        self.assertEqual(result["sources"], {"harness": "shared", "model": "shared", "reasoning_effort": "shared"})
         self.assertEqual(result["files"], {"shared": str(self.shared), "project": None})
 
     def test_project_overrides_a_single_field(self):
         self.write_project("""version: 1
 roles:
   planner:
+    harness: agy
     model: project-model
 """)
         result = self.resolve()
-        self.assertEqual(result["settings"], {"model": "project-model", "reasoning_effort": "high"})
-        self.assertEqual(result["sources"], {"model": "project", "reasoning_effort": "shared"})
+        self.assertEqual(result["settings"], {"harness": "agy", "model": "project-model", "reasoning_effort": "high"})
+        self.assertEqual(result["sources"], {"harness": "project", "model": "project", "reasoning_effort": "shared"})
         self.assertEqual(result["files"]["project"], str(self.workspace.resolve() / "orchestrator-defaults.yaml"))
 
     def test_omitted_and_explicit_default_are_distinct(self):
         self.write_project("""version: 1
 roles:
   planner:
+    harness: claude
     model: project-model
     reasoning_effort: low
 """)
         omitted = self.resolve()
         defaulted = self.resolve(model="default", effort="default")
-        self.assertEqual(omitted["settings"], {"model": "project-model", "reasoning_effort": "low"})
-        self.assertEqual(defaulted["settings"], {"model": None, "reasoning_effort": None})
-        self.assertEqual(defaulted["sources"], {"model": "explicit", "reasoning_effort": "explicit"})
+        self.assertEqual(omitted["settings"], {"harness": "claude", "model": "project-model", "reasoning_effort": "low"})
+        self.assertEqual(defaulted["settings"], {"harness": "claude", "model": None, "reasoning_effort": None})
+        self.assertEqual(defaulted["sources"], {"harness": "project", "model": "explicit", "reasoning_effort": "explicit"})
 
     def test_explicit_values_win_and_json_shape_is_fixed(self):
         self.write_project("""version: 1
 roles:
   coder:
+    harness: claude
     model: project-model
     reasoning_effort: low
 """)
-        result = self.resolve("coder", "gpt-explicit", "xhigh")
+        result = self.resolve("coder", "gpt-explicit", "xhigh", "codex")
         self.assertEqual(list(result), ["role", "settings", "sources", "files"])
-        self.assertEqual(result["settings"], {"model": "gpt-explicit", "reasoning_effort": "xhigh"})
-        self.assertEqual(result["sources"], {"model": "explicit", "reasoning_effort": "explicit"})
+        self.assertEqual(result["settings"], {"harness": "codex", "model": "gpt-explicit", "reasoning_effort": "xhigh"})
+        self.assertEqual(result["sources"], {"harness": "explicit", "model": "explicit", "reasoning_effort": "explicit"})
         self.assertEqual(json.loads(json.dumps(result))["role"], "coder")
 
     def test_cli_prints_only_one_fixed_json_object(self):
@@ -108,7 +115,7 @@ roles:
              redirect_stdout(output), redirect_stderr(errors):
             code = self.resolver.main([
                 "--workspace", str(self.workspace), "--role", "planner",
-                "--model", "default", "--reasoning-effort", "high",
+                "--harness", "codex", "--model", "default", "--reasoning-effort", "high",
             ])
         self.assertEqual(code, 0)
         self.assertEqual(errors.getvalue(), "")
@@ -116,8 +123,8 @@ roles:
             json.loads(output.getvalue()),
             {
                 "role": "planner",
-                "settings": {"model": None, "reasoning_effort": "high"},
-                "sources": {"model": "explicit", "reasoning_effort": "explicit"},
+                "settings": {"harness": "codex", "model": None, "reasoning_effort": "high"},
+                "sources": {"harness": "explicit", "model": "explicit", "reasoning_effort": "explicit"},
                 "files": {"shared": str(self.shared), "project": None},
             },
         )
@@ -137,6 +144,7 @@ roles:
             "duplicate": SHARED.replace("    model: null\n", "    model: null\n    model: x\n", 1),
             "order": SHARED.replace("    model: null\n    reasoning_effort: high", "    reasoning_effort: high\n    model: null", 1),
             "missing-field": SHARED.replace("    reasoning_effort: high\n", "", 1),
+            "missing-harness": SHARED.replace("    harness: claude\n", "", 1),
             "yaml-default": SHARED.replace("model: null", "model: default", 1),
         }
         for name, content in cases.items():
@@ -195,6 +203,19 @@ roles:
         self.shared.symlink_to(target)
         with self.assertRaises(ValueError):
             self.resolve()
+
+    def test_rejects_invalid_harness_and_harness_effort_pair(self):
+        for value in ("default", "null", "unknown"):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    self.resolve(harness=value)
+        with mock.patch.object(self.resolver, "SHARED_DEFAULTS", self.shared):
+            with self.assertRaises(ValueError):
+                self.resolver.resolve_settings(
+                    self.workspace, "planner", self.resolver.UNSET,
+                    self.resolver.UNSET, harness=None)
+        with self.assertRaises(ValueError):
+            self.resolve("reviewer", effort="xhigh")
         self.shared.unlink()
         os.mkfifo(self.shared)
         with self.assertRaises(ValueError):
