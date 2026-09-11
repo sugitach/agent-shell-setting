@@ -21,8 +21,12 @@ python3 /path/to/skills/orchestrator/scripts/external_runner.py run \
 run はフォアグラウンドで実行する。親の長時間コマンド実行機能で起動し、そのセッションを維持して結果を待つ。起動直後に表示される JSON の job パスを記録する。
 CLI 実行方式は Codex=`exec --json`、Claude=`--print --output-format json`、agy=`--sandbox --input-format stream-json --output-format stream-json`。
 すべて標準入力で依頼本文を渡す。agy は user イベントを input.jsonl に保存して渡し、依頼ファイルの読み取り権限に依存しない。
-`--model` は明示指定が必要なときだけ渡す。未指定では CLI の既存設定を使う。
-`--reasoning-effort` は `low`、`medium`、`high`、`xhigh`、`max` を受け付ける。
+resolve_role_settings.py が共通・プロジェクト・明示指定から role ごとの既定値を解決する。
+親は task_role_state.py が開始時に固定した roles.<role> の統合レコードから harness と解決値を
+取り出して渡す。通常継続では YAML を再読込しない。external_runner.py は設定ファイルや親 state を読まず、
+解決済みの non-null 値だけを CLI 引数に変換する。
+model が null なら --model を付けず、reasoning effort が null なら effort 用の引数を付けないため、CLI の既定値を使う。
+--reasoning-effort は low、medium、high、xhigh、max を受け付ける。
 Codex は `-c model_reasoning_effort="…"`、Claude は `--effort` に変換する。agy は `--effort` を使うが、対応値は `low`、`medium`、`high` だけなので、それ以外は起動前に拒否する。
 native 呼び出しでは親の公開ツールが model・reasoning effort を個別指定できることを確認してから渡す。指定できない場合は既定値へ黙って落とさず、external を選べるか確認し、どちらも不可なら blocked とする。
 
@@ -32,6 +36,18 @@ native 呼び出しでは親の公開ツールが model・reasoning effort を�
 - workspace-write は Codex の workspace-write sandbox、Claude の acceptEdits を指定する。Claude のシェル実行等は既存の許可設定に依存し、全コマンドを許可するものではない。
 - agy は read-only 強制手段が未確認なので既定では起動を拒否する。workspace-write を明示した場合のみ sandbox を有効にして起動する。これは Codex と同じ権限制御を保証するものではない。
 - 権限回避フラグ、認証情報のコピー、hook の無効化は行わない。Claude 内からの Claude CLI 起動がネスト制約に阻まれる場合も環境変数で迂回せず、native または利用可能な接続方式を検討する。
+
+## 外部 Claude の認証確認
+
+Codex のサンドボックス内では、通常のターミナルでログイン済みでも Claude CLI が `Not logged in · Please run /login` を返す場合がある。子も親のサンドボックス制限を継承する。
+
+1. Codex のサンドボックスから外部 Claude を初めて起動する前に、起動予定の環境で `claude auth status` を確認する。同じセッション・同じ実行環境で確認済みなら再利用する。アカウント情報を含む出力は全文を共有せず、ログイン状態と認証方式だけを記録する。
+2. 未ログイン判定なら、利用可能な承認付き実行機能でサンドボックス外の `claude auth status` と比較する。既存の承認が対象操作を含む場合は確認を繰り返さず、その範囲で進める。
+3. 外側だけログイン済みなら、外部通信とサンドボックス外実行に必要な承認を確認し、`external_runner.py run` 自体を外側で実行する。Codex の `exec_command` で対応している場合は `sandbox_permissions="require_escalated"` を使う。指定済みの harness・role・model・effort・access は維持する。サンドボックス外では親の制限が外れるため、ランナーの access 指定が提供する範囲を超えた制限は保証しない。
+4. 両方で未ログインなら再試行を止め、通常のターミナルで Claude のログインが必要と報告する。承認付き実行が利用できない・拒否された場合は blocked とし、認証済みターミナルで実行できる具体的なランナーコマンドとログ保存先を提示する。agent-shell / ACP でも親の公開ツールで可否を判断する。
+
+すでに起動が失敗している場合は、旧ジョブの終了・停止を確認してから上記を適用する。環境変更後も失敗したらログを再精査し、同一原因の修正回数を引き継いで「停止と再開」の上限に従う。認証確認のたびに子を起動しない。
+再ログインの反復、認証情報のコピー、`--permission-mode` の緩和、hook やネスト制約の無効化で対処しない。
 
 ## 状態・結果・停止
 
