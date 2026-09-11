@@ -22,8 +22,9 @@ run はフォアグラウンドで実行する。親の長時間コマンド実�
 CLI 実行方式は Codex=`exec --json`、Claude=`--print --output-format json`、agy=`--sandbox --input-format stream-json --output-format stream-json`。
 すべて標準入力で依頼本文を渡す。agy は user イベントを input.jsonl に保存して渡し、依頼ファイルの読み取り権限に依存しない。
 `--model` は明示指定が必要なときだけ渡す。未指定では CLI の既存設定を使う。
-`--reasoning-effort` を指定すると、各 CLI に `--effort` として渡す。指定可能な値は
-`low`、`medium`、`high`、`xhigh`、`max`。利用するハーネスが対応している値を選ぶ。
+`--reasoning-effort` は `low`、`medium`、`high`、`xhigh`、`max` を受け付ける。
+Codex は `-c model_reasoning_effort="…"`、Claude は `--effort` に変換する。agy は `--effort` を使うが、対応値は `low`、`medium`、`high` だけなので、それ以外は起動前に拒否する。
+native 呼び出しでは親の公開ツールが model・reasoning effort を個別指定できることを確認してから渡す。指定できない場合は既定値へ黙って落とさず、external を選べるか確認し、どちらも不可なら blocked とする。
 
 ## 権限
 

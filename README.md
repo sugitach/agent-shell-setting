@@ -190,10 +190,11 @@ hook のソースは [`claude-code/hooks/circuit-breaker.py`](claude-code/hooks/
 指摘があれば担当へ戻す。CI 失敗が仕様・設計に関わる場合は planner、実装・テスト・ビルドの不備なら coder に戻す。
 修正後は再レビューし、最新 PR head の CI 成功を確認する。環境障害・権限不足には根拠なくコード変更を行わない。
 親も子もハーネスは固定しない。既定は planner=claude、coder=codex、reviewer=agy で、依頼時に上書きできる。
+各役割には model と reasoning effort も個別指定できる。未指定ならハーネス既定値を使い、対象ハーネスが受け付けない指定は黙って変更せず blocked とする。
 
 親への依頼例:
 
-> orchestrator スキルで Issue #123 を進めて。planner=claude、coder=codex、reviewer=agy。
+> orchestrator スキルで Issue #123 を進めて。planner=claude、coder=codex、reviewer=agy。coder は model=gpt-5、reasoning effort=high。
 
 親が子を呼ぶ際には、担当スキル、Issue、計画版、作業範囲、成果物の返却先を渡す。
 状態と引き継ぎの形式は [handoff.md](skills/orchestrator/references/handoff.md) を参照。

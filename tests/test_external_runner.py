@@ -57,8 +57,15 @@ class RunnerTest(unittest.TestCase):
         self.assertIn("# Reviewer", (job / "request.md").read_text())
         self.assertEqual(state["transport"], "external")
 
-    def test_model_and_reasoning_effort_are_passed_to_each_harness(self):
-        for harness in ("codex", "claude", "agy"):
+    def test_model_and_reasoning_effort_are_translated_per_harness(self):
+        codex = runner.command_for("codex", "codex", self.workspace, self.workspace / "job",
+                                   "workspace-write", "test-model", 5, "xhigh")
+        self.assertIn("--model", codex)
+        self.assertIn("test-model", codex)
+        self.assertIn("-c", codex)
+        self.assertIn('model_reasoning_effort="xhigh"', codex)
+        self.assertNotIn("--effort", codex)
+        for harness in ("claude", "agy"):
             with self.subTest(harness=harness):
                 command = runner.command_for(
                     harness, harness, self.workspace, self.workspace / "job",
@@ -67,6 +74,11 @@ class RunnerTest(unittest.TestCase):
                 self.assertIn("test-model", command)
                 self.assertIn("--effort", command)
                 self.assertIn("high", command)
+
+    def test_agy_rejects_unsupported_reasoning_effort(self):
+        with self.assertRaisesRegex(ValueError, "agy"):
+            runner.command_for("agy", "agy", self.workspace, self.workspace / "job",
+                               "workspace-write", None, 5, "xhigh")
 
     def test_claude_json_error_is_not_success(self):
         self.prompt.write_text("JSON_ERROR")

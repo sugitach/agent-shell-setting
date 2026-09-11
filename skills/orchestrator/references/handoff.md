@@ -16,6 +16,11 @@
   "transport_mode": "auto",
   "phase": "planning",
   "roles": {"planner": "claude", "coder": "codex", "reviewer": "agy"},
+  "role_settings": {
+    "planner": {"model": null, "reasoning_effort": null},
+    "coder": {"model": "gpt-5", "reasoning_effort": "high"},
+    "reviewer": {"model": null, "reasoning_effort": "medium"}
+  },
   "issue": "issue URL",
   "branch": null,
   "plan_revision": 1,
@@ -29,7 +34,7 @@
 ```
 
 phase は planning / plan_review / coding / implementation_review / publishing / ci / blocked / complete。
-active_child にはハーネス、transport（native / external）、選択根拠、セッション・ジョブID、担当、作業ディレクトリ、起動時刻を記録する。
+active_child にはハーネス、transport（native / external）、選択根拠、セッション・ジョブID、担当、作業ディレクトリ、起動時刻、実際に渡した model・reasoning_effort を記録する。
 子のIDは transport とハーネスと組にして扱う。方式を変えても task_id・失敗履歴・成果物の参照を維持する。
 review には判定だけでなく、計画版、対象コミットと未コミット差分の識別情報、レビュー結果パスを保存する。
 レビュー後に差分が変われば承認を無効にする。公開前の自動整形やコミット hook による変更も含む。
@@ -40,6 +45,7 @@ failures には原因ID、初回エラー、修正ごとの担当・アプロー
 - あなたは子セッションであり、役割は planner / coder / reviewer のいずれか。再委任は禁止。
 - 使う同名 skill、task_id、Issue、承認済み計画と版。
 - 担当範囲、作業ディレクトリ・ブランチ、許可する操作、変更してよいファイル。
+- 指定された model・reasoning effort。未指定ならハーネス既定値を使うこと。
 - 今回の目的。reviewer には plan / implementation の区分も渡す。
 - 過去の失敗原因・試行回数、今回確認すべき指摘。
 - 結果の返却先と、完了・blocked を親へ返す方法。

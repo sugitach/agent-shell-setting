@@ -125,7 +125,7 @@ def command_for(harness, executable, workspace, job, access, model, timeout,
         if model:
             command += ["--model", model]
         if reasoning_effort:
-            command += ["--effort", reasoning_effort]
+            command += ["-c", f'model_reasoning_effort="{reasoning_effort}"']
         return command + ["-"]
     if harness == "claude":
         command = [executable, "--print", "--output-format", "json",
@@ -147,6 +147,8 @@ def command_for(harness, executable, workspace, job, access, model, timeout,
     if model:
         command += ["--model", model]
     if reasoning_effort:
+        if reasoning_effort not in {"low", "medium", "high"}:
+            raise ValueError("agy の reasoning-effort は low、medium、high のみ指定できます")
         command += ["--effort", reasoning_effort]
     return command
 
