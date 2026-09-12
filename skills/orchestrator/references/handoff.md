@@ -49,6 +49,7 @@
 ```
 
 phase は planning / plan_review / coding / implementation_review / publishing / ci / blocked / complete。
+分割時は splitting / split_review / issue_selection も使う（遷移と記録は以下）。
 roles が役割の唯一の正本である。各 roles.<role> は harness、resolver が解決した model・reasoning_effort、
 各値の source（harness / model / reasoning_effort）だけを持つ。route 選択、子の起動引数、active_child の実績記録は同じ roles.<role> を読む。
 task 開始時は metadata-only state に task_role_state.py init を一度だけ実行し、全 role のこのレコードを
@@ -62,7 +63,33 @@ role_settings_files には resolver が返した共有・プロジェクト設�
 明示 resume では active_child がないことを確認してから全 role を再解決し、role_settings_history に reason、
 previous_roles、previous_files、resumed_roles、resumed_files を保存する。
 
+## 分割・Issue 選択サイクルの記録
+
+[分割・選択の共有手順](issue-split.md) を使う場合だけ、state に任意の `issue_selection_file` を追加する。値は候補と分割履歴を保存するローカル文書のパス（例: `.orchestration/<task-id>/issue-selection.md`）とし、親が更新する。スクリプトによる自動管理・自動検証は行わない。
+
+その文書には次を Issue ごとに記録する。
+
+- 親子の Issue URL、規模判断、分割計画版、要件・DoD 対応表と子の本文の参照。
+- 作成済み・未作成の子、分割レビューの判定・対象版・本文の識別情報・結果パス、直接 coding 候補から除外した分割済み親。
+- 候補の未着手／着手中／完了の状態、依存先、マージと統合確認の根拠、未解消・選択不能の理由、次に選んだ Issue と選択理由。
+- 各 Issue の計画・レビュー・ブランチ・PR・CI の参照と、親の統合確認結果。PR の CI 成功とマージ・依存解消は区別する。
+
+phase は次のように運用する。
+
+| 条件 | 遷移 |
+| --- | --- |
+| 選択した Issue を概算して分割不要 | planning → plan_review → 既存の coding 以降 |
+| 分割を選び、必要な子をすべて作成 | planning → splitting → split_review |
+| 現在の分割計画・子の本文に対して approved | split_review → issue_selection → 選んだ子の planning |
+| 不備で差し戻し／未作成・確認不能 | splitting へ戻して修正、または blocked。coding・再選択へは進まない |
+| 候補なし・循環依存・分割の進展なし | 理由を記録して修正依頼または blocked。状態変化なくループしない |
+
+`issue` は現在選択した Issue を表す。別 Issue に切り替える前に現在の Issue の成果物・進行状況を上記文書へ保存し、active_child が終了済みであることを確認する。`branch`、`plan_revision`、`review`、`pr`、`ci_head_sha` は次の Issue の値へ切り替え、まだなければ未設定にする。前の Issue の承認・PR・CI を流用しない。
+同じ task_id・owner_session・固定 roles と failures を維持し、Issue 選択を理由に init / resume を繰り返さない。工程8の報告は各 Issue の実装・CI 完了を表し、分割タスク全体の complete は子孫すべてのマージ・完了と親の統合確認後に記録する。次候補へ移る場合は issue_selection を使う。
+
 ## 既存 state との互換性
+
+`issue_selection_file` のない既存 state は、従来の単一 Issue フローとしてそのまま扱う。分割する時点でのみ上記の任意フィールドと文書を追加し、既存の phase や roles のスキーマを置き換えない。
 
 再開対象が旧形式なら、全 role について roles.<role> の string harness と
 role_settings.<role> の model、reasoning_effort、sources が揃い、型も正しいことを確認する。
