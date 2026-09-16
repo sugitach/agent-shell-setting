@@ -1,0 +1,17 @@
+version: 1
+roles:
+  planner:
+    read:
+      - "."
+    write:
+      - ".orchestration"
+  coder:
+    read:
+      - "."
+    write:
+      - "."
+  reviewer:
+    read:
+      - "."
+    write:
+      - ".orchestration"

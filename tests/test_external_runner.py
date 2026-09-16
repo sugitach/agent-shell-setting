@@ -35,13 +35,16 @@ class RunnerTest(unittest.TestCase):
         self.prompt = self.workspace / "prompt.md"
         self.prompt.write_text("Check the supplied task and return a result.")
 
-    def command(self, harness="codex", timeout="5"):
-        return [sys.executable, str(RUNNER), "run", "--workspace", str(self.workspace),
+    def command(self, harness="codex", timeout="5", agy_project=None):
+        command = [sys.executable, str(RUNNER), "run", "--workspace", str(self.workspace),
                 "--task-id", "task-1", "--harness", harness, "--role", "reviewer",
                 "--prompt-file", str(self.prompt), "--timeout", timeout]
+        if agy_project is not None:
+            command += ["--agy-project", agy_project]
+        return command
 
-    def run_job(self, harness="codex", timeout="5"):
-        return subprocess.run(self.command(harness, timeout), env=self.env,
+    def run_job(self, harness="codex", timeout="5", agy_project=None):
+        return subprocess.run(self.command(harness, timeout, agy_project), env=self.env,
                               capture_output=True, text=True, timeout=12)
 
     def state(self):
@@ -73,7 +76,8 @@ class RunnerTest(unittest.TestCase):
         args = type("Args", (), dict(
             workspace=self.workspace, task_id="task-1", harness="agy", role="reviewer",
             prompt_file=self.prompt, timeout=0.05, cancel_grace=0.05,
-            access="workspace-write", model=None, reasoning_effort=None))()
+            access="workspace-write", model=None, reasoning_effort=None,
+            agy_project="review-project"))()
 
         # 擬似クロック: 呼び出すたびに固定ステップで進む決定的な時計。
         # run()のtimeoutループ・interrupt_agyのgraceループのデッドライン判定は
@@ -140,18 +144,38 @@ class RunnerTest(unittest.TestCase):
             with self.subTest(harness=harness):
                 command = runner.command_for(
                     harness, harness, self.workspace, self.workspace / "job",
-                    "workspace-write", "test-model", 5, "high")
+                    "workspace-write", "test-model", 5, "high",
+                    agy_project="review-project" if harness == "agy" else None)
                 self.assertIn("--model", command)
                 self.assertIn("test-model", command)
                 self.assertIn("--effort", command)
                 self.assertIn("high", command)
+
+    def test_agy_includes_resolved_project(self):
+        command = runner.command_for(
+            "agy", "agy", self.workspace, self.workspace / "job",
+            "workspace-write", None, 5, None, agy_project="review-project")
+        self.assertIn("--project", command)
+        self.assertEqual(command[command.index("--project") + 1], "review-project")
+
+    def test_agy_requires_project_id(self):
+        with self.assertRaisesRegex(ValueError, "agy project id could not be resolved"):
+            runner.command_for("agy", "agy", self.workspace, self.workspace / "job",
+                               "workspace-write", None, 5, None)
+
+    def test_agy_cli_blocks_before_default_project_fallback(self):
+        result = subprocess.run(self.command("agy") + ["--access", "workspace-write"],
+                                env=self.env, capture_output=True, text=True, timeout=8)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("agy project id could not be resolved", result.stdout)
 
     def test_none_model_and_reasoning_effort_are_omitted_per_harness(self):
         for harness in ("codex", "claude", "agy"):
             with self.subTest(harness=harness):
                 command = runner.command_for(
                     harness, harness, self.workspace, self.workspace / "job",
-                    "workspace-write", None, 5, None)
+                    "workspace-write", None, 5, None,
+                    agy_project="review-project" if harness == "agy" else None)
                 self.assertNotIn("--model", command)
                 self.assertNotIn("--effort", command)
                 self.assertNotIn('model_reasoning_effort=', " ".join(command))
@@ -173,14 +197,14 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(self.state()[0]["status"], "completed")
 
     def test_agy_success_requires_explicit_access(self):
-        result = subprocess.run(self.command("agy") + ["--access", "workspace-write"],
+        result = subprocess.run(self.command("agy", agy_project="review-project") + ["--access", "workspace-write"],
                                 env=self.env, capture_output=True, text=True, timeout=8)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(self.state()[0]["status"], "completed")
 
     def test_agy_timeout_is_unknown(self):
         self.prompt.write_text("HANG")
-        result = subprocess.run(self.command("agy", "0.3") + ["--access", "workspace-write"],
+        result = subprocess.run(self.command("agy", "0.3", "review-project") + ["--access", "workspace-write"],
                                 env=self.env, capture_output=True, text=True, timeout=8)
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.state()[0]["status"], "unknown")
@@ -203,14 +227,14 @@ class RunnerTest(unittest.TestCase):
 
     def test_agy_structured_error_is_not_success(self):
         self.prompt.write_text("JSON_ERROR")
-        result = subprocess.run(self.command("agy") + ["--access", "workspace-write"],
+        result = subprocess.run(self.command("agy", agy_project="review-project") + ["--access", "workspace-write"],
                                 env=self.env, capture_output=True, text=True, timeout=8)
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.state()[0]["status"], "failed")
 
     def test_agy_denied_action_is_not_success(self):
         self.prompt.write_text("DENIED")
-        result = subprocess.run(self.command("agy") + ["--access", "workspace-write"],
+        result = subprocess.run(self.command("agy", agy_project="review-project") + ["--access", "workspace-write"],
                                 env=self.env, capture_output=True, text=True, timeout=8)
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.state()[0]["status"], "failed")

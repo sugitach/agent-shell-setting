@@ -3,6 +3,7 @@
 
 import argparse
 import fcntl
+import importlib.util
 import json
 import os
 import re
@@ -14,9 +15,17 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
-
 SKILLS = Path(__file__).resolve().parents[2]
 ACTIVE = {"starting", "running", "stopping", "unknown"}
+
+
+def resolve_agy_project(workspace, explicit=None):
+    """同じ scripts ディレクトリの resolver を実行形態によらず読み込む。"""
+    path = Path(__file__).with_name("resolve_agy_project.py")
+    spec = importlib.util.spec_from_file_location("resolve_agy_project", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.resolve_agy_project(workspace, explicit)
 
 
 class AgyStream:
@@ -116,7 +125,7 @@ def task_lock(task):
 
 
 def command_for(harness, executable, workspace, job, access, model, timeout,
-                reasoning_effort=None):
+                reasoning_effort=None, agy_project=None):
     if harness == "codex":
         command = [executable, "exec", "--json", "--color", "never", "--cd", str(workspace),
                    "--sandbox", access, "-c", 'approval_policy="never"',
@@ -140,9 +149,11 @@ def command_for(harness, executable, workspace, job, access, model, timeout,
     # agy の sandbox は read-only と同義ではないため明示的に区別する。
     if access == "read-only":
         raise ValueError("agy CLI に read-only 強制オプションを確認できません。workspace-write の明示が必要です")
+    if agy_project is None:
+        raise ValueError("agy project id could not be resolved")
     # 内部タイムアウトより先に親がSIGINTを送り、結果を読み取る時間を確保する。
     command = [executable, "--sandbox", "--input-format", "stream-json", "--output-format", "stream-json",
-               "--print-timeout", f"{int(timeout) + 120}s"]
+               "--print-timeout", f"{int(timeout) + 120}s", "--project", agy_project]
     if model:
         command += ["--model", model]
     if reasoning_effort:
@@ -238,9 +249,11 @@ def run(args):
                 raise ValueError(f"未解決の旧ジョブがあります。停止確認が必要です: {previous.parent}")
         job = task / "jobs" / uuid.uuid4().hex
         # 引数の検証はジョブ作成前に終える。
+        agy_project = (resolve_agy_project(workspace, getattr(args, "agy_project", None))
+                       if args.harness == "agy" else None)
         command = command_for(args.harness, executable, workspace, job,
                               args.access, args.model, args.timeout,
-                              args.reasoning_effort)
+                              args.reasoning_effort, agy_project)
         job.mkdir(mode=0o700)
         (job / "request.md").write_text(
             f"あなたは子セッションです。task_id={args.task_id}, role={args.role}。再委任は禁止。\n"
@@ -258,6 +271,8 @@ def run(args):
                  "model": args.model, "reasoning_effort": args.reasoning_effort,
                  "runner_pid": os.getpid(), "child_pid": None,
                  "started_at": time.time(), "exit_code": None}
+        if agy_project is not None:
+            state["agy_project"] = agy_project
         write_json(job / "state.json", state)
         print(json.dumps(state, ensure_ascii=False), flush=True)
         interrupted = False
@@ -365,6 +380,7 @@ def main():
     execute.add_argument("--access", choices=["read-only", "workspace-write"], default="read-only")
     execute.add_argument("--model")
     execute.add_argument("--reasoning-effort", choices=["low", "medium", "high", "xhigh", "max"])
+    execute.add_argument("--agy-project")
     execute.add_argument("--timeout", type=float, default=600)
     execute.add_argument("--cancel-grace", type=float, default=5)
     for name in ("status", "cancel"):

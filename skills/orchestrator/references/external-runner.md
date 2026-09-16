@@ -17,6 +17,20 @@ python3 /path/to/skills/orchestrator/scripts/external_runner.py run \
   --timeout 600
 ```
 
+### Agy Project と Permission Grant プロファイル
+
+agy を起動する場合、親は必ず Agy Project ID を解決し、ランナーへ `--agy-project <id>` を渡す。
+ランナーはこれを agy の `--project <id>` に変換する。解決順は、run の `--agy-project`、環境変数
+`AGY_PROJECT_ID`、workspace の `.orchestration/agy-project.json`（`{"project_id":"<id>"}`）である。
+いずれもなければ既定 Project へフォールバックせず、事前条件不備として終了コード2で停止する。
+このローカル JSON は通常ファイル・4 KiB以下・UTF-8・単一の `project_id` キーだけを受け付ける。
+
+[agy-permission-profiles.yaml](../agy-permission-profiles.yaml) は planner / coder / reviewer が期待する
+workspace 相対の read/write 境界を宣言する。planner と reviewer は全体を読み `.orchestration` だけへ書き込み、
+coder は workspace 全体へ書き込める。これは Agy の公開された非対話 Permission Grant API がない間の
+設計文書であり、ランナーは Agy の内部設定ファイルを編集したり、権限を自動適用したりしない。親は Agy の
+対話的な権限設定で、選択した role のプロファイルと同じ境界を Project に設定してから起動する。
+
 `/path/to/skills` は実際のスキル配置先（Codex は `~/.agents/skills`、Claude は `~/.claude/skills`、agy は `~/.gemini/antigravity-cli/skills` など）に置き換える。
 run はフォアグラウンドで実行する。親の長時間コマンド実行機能で起動し、そのセッションを維持して結果を待つ。起動直後に表示される JSON の job パスを記録する。
 CLI 実行方式は Codex=`exec --json`、Claude=`--print --output-format json`、agy=`--sandbox --input-format stream-json --output-format stream-json`。
