@@ -41,7 +41,7 @@ class AgyCooperativeE2EProbe(unittest.TestCase):
         command = [sys.executable, str(RUNNER), "run", "--workspace", str(self.workspace),
                    "--task-id", "task-1", "--harness", "agy", "--role", "reviewer",
                    "--prompt-file", str(self.prompt), "--access", "workspace-write",
-                   "--timeout", "2", "--cancel-grace", "5"]
+                   "--agy-project", "probe-project", "--timeout", "2", "--cancel-grace", "5"]
         result = subprocess.run(command, env=self.env, capture_output=True, text=True, timeout=20)
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         states = list((self.workspace / ".orchestration/task-1/jobs").glob("*/state.json"))
