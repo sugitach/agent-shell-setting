@@ -247,6 +247,11 @@ agy の reasoning_effort は low / medium / high だけを受理する。コメ�
 スキル・共有ルール・方式選択ツール・外部CLIランナー・配布は実装済み。
 外部実行は [external_runner.py](skills/orchestrator/scripts/external_runner.py) の run / status / cancel を使う。
 起動方法、結果の読み方、権限、停止の制約は [external-runner.md](skills/orchestrator/references/external-runner.md) を参照。
+agy を使う場合は workspace ごとの Project ID を `--agy-project`、`AGY_PROJECT_ID`、または
+`.orchestration/agy-project.json` で設定する。未設定時は既定 Project へフォールバックせず停止する。
+role ごとの期待する Permission Grant 境界は
+[agy-permission-profiles.yaml](skills/orchestrator/agy-permission-profiles.yaml) に宣言する。現在は Agy の
+公開された非対話設定APIがないため、親が Agy の対話的設定で対応する Project に適用する。
 同じタスクの外部起動は排他し、親が blocked の場合や未解決の旧ジョブがある場合は起動を拒否する。
 親の単一起動ロック、native と external をまたぐ排他、修正回数の自動判定・強制は未実装。
 現時点の横断的な停止・回数引き継ぎはスキルの指示であり、Claude の既存 hook は従来どおりセッション単位で動作する。

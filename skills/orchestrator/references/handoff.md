@@ -126,3 +126,21 @@ Markdown 等で次を報告する。親は自己申告だけでなく成果物�
 - 検証コマンド、終了結果、ログへの参照。未実行は理由を明記
 - 未解決事項、ユーザー判断が必要な点
 - 発見した失敗原因と、実際に試した修正・結果
+
+## 子からの GitHub 操作代行要求
+
+子が sandbox 制約で `gh`、GitHub API、Issue・PR・CI の操作を実行できない場合、認証情報や権限を
+子へ渡したり迂回したりしない。子は担当結果に次の構造化ブロックを付け、親へ操作を要求する。
+
+```markdown
+## GitHub操作要求
+- action: <issue_view | issue_create | issue_edit | pr_create | pr_comment | ci_status>
+- target: <Issue番号 | PR番号 | リポジトリ名>
+- payload: <ファイルパス、またはタイトル・本文等の指定>
+- reason: <操作が必要な理由>
+```
+
+親は認証済みの自身の環境で要求を実行する。成功したら `state.json` の該当フィールド
+（`issue`、`pr`、`ci_head_sha` 等）を更新し、URLまたは必要な出力を次の子の依頼へ渡す。失敗または
+実行を拒否した場合は、エラーまたは理由を `failures` か `blocked_reason` に記録して子へ返す。子は
+親から渡された結果を前提に担当工程を続行し、GitHub操作を独自に再試行しない。
