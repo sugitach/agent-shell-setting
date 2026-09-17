@@ -42,6 +42,8 @@ if "--output-last-message" in args:
         Path(args[args.index("--output-last-message") + 1]).write_text("FAKE_OK")
     print(json.dumps({"type": "thread.started", "thread_id": "fake-session"}))
 elif is_stream:
+    if "SUB_AGENT" in prompt:
+        print(json.dumps({"event": "tool", "tool": {"name": "invoke_subagent"}}))
     print(json.dumps({"event": "result", "result": {"conversation_id": "fake-agy",
                      "status": "ERROR" if "JSON_ERROR" in prompt else "SUCCESS", "response": "FAKE_OK",
                      "denied_actions": [{"action": "read_file"}] if "DENIED" in prompt else []}}))

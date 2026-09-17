@@ -13,6 +13,7 @@ from pathlib import Path
 MAX_BYTES = 4 * 1024
 PROJECT_FILE = Path(".orchestration") / "agy-project.json"
 PROJECT_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
+ROLES = {"planner", "review", "coder"}
 
 
 def fail(message):
@@ -64,7 +65,7 @@ def valid_project_id(value, source):
     return value
 
 
-def parse_project_file(data, path):
+def parse_project_file(data, path, role):
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError as error:
@@ -75,33 +76,37 @@ def parse_project_file(data, path):
         value = json.loads(text, object_pairs_hook=lambda pairs: dict(pairs) if len({key for key, _ in pairs}) == len(pairs) else (_ for _ in ()).throw(ValueError("重複キー")))
     except (TypeError, ValueError, json.JSONDecodeError) as error:
         fail(f"agy project 設定が JSON object ではありません: {path}: {error}")
-    if not isinstance(value, dict) or set(value) != {"project_id"}:
-        fail(f"agy project 設定は project_id だけを持つ JSON object である必要があります: {path}")
-    return valid_project_id(value["project_id"], str(path))
+    if not isinstance(value, dict) or set(value) != ROLES:
+        fail(f"agy project 設定は planner、review、coder を持つ JSON object である必要があります: {path}")
+    return valid_project_id(value[role], str(path))
 
 
-def resolve_agy_project(workspace, explicit=None):
+def resolve_agy_project(workspace, role, explicit=None):
     """明示引数、環境変数、workspace ファイルの順で Project ID を解決する。"""
     workspace = checked_workspace(workspace)
+    if role not in ROLES:
+        fail("agy project role は planner、review、coder のいずれかで指定してください")
     if explicit is not None:
         return valid_project_id(explicit, "--agy-project")
-    environment = os.environ.get("AGY_PROJECT_ID")
+    environment_name = f"AGY_PROJECT_ID_{role.upper()}"
+    environment = os.environ.get(environment_name)
     if environment is not None:
-        return valid_project_id(environment, "AGY_PROJECT_ID")
+        return valid_project_id(environment, environment_name)
     path = workspace / PROJECT_FILE
     data = regular_file_bytes(path)
     if data is not None:
-        return parse_project_file(data, path)
+        return parse_project_file(data, path, role)
     fail("agy project id could not be resolved")
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workspace", type=Path, required=True)
+    parser.add_argument("--role", choices=sorted(ROLES), required=True)
     parser.add_argument("--agy-project")
     args = parser.parse_args(argv)
     try:
-        print(json.dumps({"project_id": resolve_agy_project(args.workspace, args.agy_project)}, separators=(",", ":")))
+        print(json.dumps({"project_id": resolve_agy_project(args.workspace, args.role, args.agy_project)}, separators=(",", ":")))
         return 0
     except (OSError, ValueError) as error:
         print(str(error), file=sys.stderr)

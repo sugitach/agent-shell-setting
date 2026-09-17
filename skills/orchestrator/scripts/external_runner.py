@@ -17,15 +17,17 @@ from pathlib import Path
 
 SKILLS = Path(__file__).resolve().parents[2]
 ACTIVE = {"starting", "running", "stopping", "unknown"}
+PACKET_MAX_FILE_BYTES = 256 * 1024
+PACKET_MAX_TOTAL_BYTES = 2 * 1024 * 1024
 
 
-def resolve_agy_project(workspace, explicit=None):
+def resolve_agy_project(workspace, role, explicit=None):
     """同じ scripts ディレクトリの resolver を実行形態によらず読み込む。"""
     path = Path(__file__).with_name("resolve_agy_project.py")
     spec = importlib.util.spec_from_file_location("resolve_agy_project", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module.resolve_agy_project(workspace, explicit)
+    return module.resolve_agy_project(workspace, role, explicit)
 
 
 class AgyStream:
@@ -38,6 +40,21 @@ class AgyStream:
         self.result = None
         self.error = None
         self.last_event = None
+        self.subagent_actions = []
+
+    def detect_subagent_action(self, event):
+        """ストリームイベントに現れた再委任ツールを記録する。"""
+        stack = [event]
+        while stack:
+            value = stack.pop()
+            if isinstance(value, dict):
+                for key, child in value.items():
+                    if key in {"name", "tool_name", "action", "function"} and isinstance(child, str):
+                        if child.lower() in {"invoke_subagent", "define_subagent"}:
+                            self.subagent_actions.append(child)
+                    stack.append(child)
+            elif isinstance(value, list):
+                stack.extend(value)
 
     def read(self, final=False):
         previous = self.offset
@@ -60,6 +77,7 @@ class AgyStream:
                         raise ValueError("最終結果の後に追加イベントがあります")
                     name = event.get("event")
                     self.last_event = name
+                    self.detect_subagent_action(event)
                     if name == "init":
                         identity = event.get("conversation_id")
                         if self.conversation_id is not None or not isinstance(identity, str) or not identity:
@@ -94,12 +112,14 @@ class AgyStream:
         state["stop_confirmed"] = True
         if self.result.get("denied_actions"):
             state["denied_actions"] = self.result["denied_actions"]
+        if self.subagent_actions:
+            state["subagent_actions"] = self.subagent_actions
         requested = state.get("stop_requested")
         if requested:
             state["status"] = requested
         elif outcome in {"CANCELED", "INTERRUPTED"}:
             state["status"] = "cancelled"
-        elif outcome == "SUCCESS" and state["exit_code"] == 0 and isinstance(response, str) and response.strip() and not self.result.get("denied_actions"):
+        elif outcome == "SUCCESS" and state["exit_code"] == 0 and isinstance(response, str) and response.strip() and not self.result.get("denied_actions") and not self.subagent_actions:
             state["status"] = "completed"
         else:
             state.update(status="failed", error=self.result.get("error") or "agy の結果が成功条件を満たしません")
@@ -109,6 +129,70 @@ def write_json(path, value):
     temporary = path.with_name(path.name + ".tmp")
     temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n")
     temporary.replace(path)
+
+
+def packet_file(path):
+    """リンクを辿らず packet の通常ファイルを上限付きで読む。"""
+    info = os.lstat(path)
+    if not path.is_file() or path.is_symlink():
+        raise ValueError(f"packet のファイルはリンクでない通常ファイルである必要があります: {path}")
+    if info.st_size > PACKET_MAX_FILE_BYTES:
+        raise ValueError(f"packet のファイルは {PACKET_MAX_FILE_BYTES // 1024} KiB 以下にしてください: {path}")
+    return path.read_text(encoding="utf-8")
+
+
+def packet_text(workspace, packet):
+    """manifest が列挙する workspace 内 packet だけを request に埋め込む。"""
+    if packet is None:
+        return ""
+    try:
+        packet = packet.resolve(strict=True)
+    except OSError as error:
+        raise ValueError(f"packet を解決できません: {error}") from error
+    try:
+        relative = packet.relative_to(workspace)
+    except ValueError as error:
+        raise ValueError("packet は workspace 配下で指定してください") from error
+    current = workspace
+    for part in relative.parts:
+        current /= part
+        if current.is_symlink():
+            raise ValueError(f"packet のディレクトリにリンクは使えません: {current}")
+    if not packet.is_dir():
+        raise ValueError("packet は実ディレクトリで指定してください")
+    manifest_path = packet / "manifest.json"
+    manifest_text = packet_file(manifest_path)
+    try:
+        manifest = json.loads(manifest_text)
+    except json.JSONDecodeError as error:
+        raise ValueError(f"packet manifest は JSON object である必要があります: {error}") from error
+    files = manifest.get("files") if isinstance(manifest, dict) and set(manifest) == {"files"} else None
+    if not isinstance(files, list) or not files or any(not isinstance(name, str) for name in files):
+        raise ValueError("packet manifest は空でない files 配列だけを持つ必要があります")
+    if len(files) != len(set(files)):
+        raise ValueError("packet manifest の files は重複できません")
+    sections = []
+    total = 0
+    for name in files:
+        entry = Path(name)
+        if entry.is_absolute() or not name or any(part in {"", ".", ".."} for part in entry.parts):
+            raise ValueError(f"packet manifest のファイル名が不正です: {name}")
+        path = packet / entry
+        try:
+            path.relative_to(packet)
+        except ValueError as error:
+            raise ValueError(f"packet manifest のファイル名が不正です: {name}") from error
+        current = packet
+        for part in entry.parts:
+            current /= part
+            if current.is_symlink():
+                raise ValueError(f"packet のファイルにリンクは使えません: {current}")
+        text = packet_file(path)
+        total += len(text.encode("utf-8"))
+        if total > PACKET_MAX_TOTAL_BYTES:
+            raise ValueError(f"packet の合計サイズは {PACKET_MAX_TOTAL_BYTES // (1024 * 1024)} MiB 以下にしてください")
+        sections.append(f"### {name}\n\n{text}")
+    return "\n\n## Packet\n\n" + "\n\n".join(sections) + "\n"
 
 
 @contextmanager
@@ -125,7 +209,7 @@ def task_lock(task):
 
 
 def command_for(harness, executable, workspace, job, access, model, timeout,
-                reasoning_effort=None, agy_project=None):
+                reasoning_effort=None, role=None, agy_project=None):
     if harness == "codex":
         command = [executable, "exec", "--json", "--color", "never", "--cd", str(workspace),
                    "--sandbox", access, "-c", 'approval_policy="never"',
@@ -146,14 +230,17 @@ def command_for(harness, executable, workspace, job, access, model, timeout,
         if reasoning_effort:
             command += ["--effort", reasoning_effort]
         return command
-    # agy の sandbox は read-only と同義ではないため明示的に区別する。
-    if access == "read-only":
-        raise ValueError("agy CLI に read-only 強制オプションを確認できません。workspace-write の明示が必要です")
+    if role not in {"planner", "reviewer", "coder"}:
+        raise ValueError("agy role は planner、reviewer、coder のいずれかで指定してください")
+    if role == "coder" and access != "workspace-write":
+        raise ValueError("agy coder は workspace-write の明示が必要です")
     if agy_project is None:
         raise ValueError("agy project id could not be resolved")
     # 内部タイムアウトより先に親がSIGINTを送り、結果を読み取る時間を確保する。
     command = [executable, "--sandbox", "--input-format", "stream-json", "--output-format", "stream-json",
                "--print-timeout", f"{int(timeout) + 120}s", "--project", agy_project]
+    if role in {"planner", "reviewer"}:
+        command += ["--mode", "plan"]
     if model:
         command += ["--model", model]
     if reasoning_effort:
@@ -227,6 +314,7 @@ def run(args):
     if not 0 < grace <= 60:
         raise ValueError("cancel-grace は0秒より大きく60秒以下で指定してください")
     prompt = args.prompt_file.read_text()
+    packet = packet_text(workspace, getattr(args, "packet", None))
     role_skill = SKILLS / args.role / "SKILL.md"
     role_text = role_skill.read_text()
     executable = shutil.which(args.harness)
@@ -249,17 +337,18 @@ def run(args):
                 raise ValueError(f"未解決の旧ジョブがあります。停止確認が必要です: {previous.parent}")
         job = task / "jobs" / uuid.uuid4().hex
         # 引数の検証はジョブ作成前に終える。
-        agy_project = (resolve_agy_project(workspace, getattr(args, "agy_project", None))
+        agy_role = {"reviewer": "review"}.get(args.role, args.role)
+        agy_project = (resolve_agy_project(workspace, agy_role, getattr(args, "agy_project", None))
                        if args.harness == "agy" else None)
         command = command_for(args.harness, executable, workspace, job,
                               args.access, args.model, args.timeout,
-                              args.reasoning_effort, agy_project)
+                              args.reasoning_effort, args.role, agy_project)
         job.mkdir(mode=0o700)
         (job / "request.md").write_text(
             f"あなたは子セッションです。task_id={args.task_id}, role={args.role}。再委任は禁止。\n"
             "以下の担当スキルに従い、最後の回答に担当の結果を返してください。\n"
             "親の役割を引き受けず、commit/push/PR作成は行わないでください。\n\n"
-            + role_text + "\n\n## 親からの依頼\n\n" + prompt)
+            + role_text + "\n\n## 親からの依頼\n\n" + prompt + packet)
         input_path = job / "request.md"
         if args.harness == "agy":
             input_path = job / "input.jsonl"
@@ -381,6 +470,7 @@ def main():
     execute.add_argument("--model")
     execute.add_argument("--reasoning-effort", choices=["low", "medium", "high", "xhigh", "max"])
     execute.add_argument("--agy-project")
+    execute.add_argument("--packet", type=Path)
     execute.add_argument("--timeout", type=float, default=600)
     execute.add_argument("--cancel-grace", type=float, default=5)
     for name in ("status", "cancel"):

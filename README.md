@@ -247,8 +247,11 @@ agy の reasoning_effort は low / medium / high だけを受理する。コメ�
 スキル・共有ルール・方式選択ツール・外部CLIランナー・配布は実装済み。
 外部実行は [external_runner.py](skills/orchestrator/scripts/external_runner.py) の run / status / cancel を使う。
 起動方法、結果の読み方、権限、停止の制約は [external-runner.md](skills/orchestrator/references/external-runner.md) を参照。
-agy を使う場合は workspace ごとの Project ID を `--agy-project`、`AGY_PROJECT_ID`、または
-`.orchestration/agy-project.json` で設定する。未設定時は既定 Project へフォールバックせず停止する。
+agy を使う場合は role ごとの Project ID を `--agy-project`、`AGY_PROJECT_ID_PLANNER`、
+`AGY_PROJECT_ID_REVIEW`、`AGY_PROJECT_ID_CODER`、または `.orchestration/agy-project.json` の
+`planner` / `review` / `coder` キーで設定する。未設定時は既定 Project へフォールバックせず停止する。
+planner と reviewer は `--mode plan` で起動し、coder は workspace-write で起動する。親は Issue、計画、diff、
+検証ログを packet にまとめ、GitHub 操作と追加検証は常に親が実行する。
 role ごとの期待する Permission Grant 境界は
 [agy-permission-profiles.yaml](skills/orchestrator/agy-permission-profiles.yaml) に宣言する。現在は Agy の
 公開された非対話設定APIがないため、親が Agy の対話的設定で対応する Project に適用する。

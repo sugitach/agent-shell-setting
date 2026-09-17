@@ -29,57 +29,65 @@ class AgyProjectTest(unittest.TestCase):
         self.workspace.mkdir()
         self.resolver = load_resolver()
 
-    def config(self, project_id):
+    def config(self, **projects):
         path = self.workspace / ".orchestration"
         path.mkdir(exist_ok=True)
-        (path / "agy-project.json").write_text(json.dumps({"project_id": project_id}))
+        (path / "agy-project.json").write_text(json.dumps(projects))
 
     def test_explicit_project_has_highest_priority(self):
-        self.config("file-project")
-        with mock.patch.dict(os.environ, {"AGY_PROJECT_ID": "environment-project"}):
+        self.config(planner="file-planner", review="file-review", coder="file-coder")
+        with mock.patch.dict(os.environ, {"AGY_PROJECT_ID_PLANNER": "environment-project"}):
             self.assertEqual(
-                self.resolver.resolve_agy_project(self.workspace, "explicit-project"),
+                self.resolver.resolve_agy_project(self.workspace, "planner", "explicit-project"),
                 "explicit-project")
 
     def test_environment_project_precedes_workspace_file(self):
-        self.config("file-project")
-        with mock.patch.dict(os.environ, {"AGY_PROJECT_ID": "environment-project"}):
+        self.config(planner="file-planner", review="file-review", coder="file-coder")
+        with mock.patch.dict(os.environ, {"AGY_PROJECT_ID_REVIEW": "environment-project"}):
             self.assertEqual(
-                self.resolver.resolve_agy_project(self.workspace), "environment-project")
+                self.resolver.resolve_agy_project(self.workspace, "review"), "environment-project")
 
     def test_workspace_file_is_used_when_no_higher_source_exists(self):
-        self.config("file-project")
+        self.config(planner="file-planner", review="file-review", coder="file-coder")
         with mock.patch.dict(os.environ, {}, clear=True):
-            self.assertEqual(self.resolver.resolve_agy_project(self.workspace), "file-project")
+            self.assertEqual(self.resolver.resolve_agy_project(self.workspace, "coder"), "file-coder")
 
     def test_unresolved_project_fails_without_default_fallback(self):
         with mock.patch.dict(os.environ, {}, clear=True):
             with self.assertRaisesRegex(ValueError, "agy project id could not be resolved"):
-                self.resolver.resolve_agy_project(self.workspace)
+                self.resolver.resolve_agy_project(self.workspace, "planner")
+
+    def test_rejects_unknown_role_and_old_single_project_schema(self):
+        self.config(project_id="old-project")
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with self.assertRaisesRegex(ValueError, "role"):
+                self.resolver.resolve_agy_project(self.workspace, "reviewer")
+            with self.assertRaises(ValueError):
+                self.resolver.resolve_agy_project(self.workspace, "planner")
 
     def test_rejects_invalid_workspace_file(self):
         path = self.workspace / ".orchestration"
         path.mkdir()
-        (path / "agy-project.json").write_text('{"project_id":"ok", "extra":true}')
+        (path / "agy-project.json").write_text('{"planner":"ok", "review":"ok", "coder":"ok", "extra":true}')
         with mock.patch.dict(os.environ, {}, clear=True):
             with self.assertRaises(ValueError):
-                self.resolver.resolve_agy_project(self.workspace)
+                self.resolver.resolve_agy_project(self.workspace, "planner")
 
     def test_rejects_symlink_and_oversized_workspace_file(self):
         path = self.workspace / ".orchestration"
         path.mkdir()
         target = self.workspace / "target.json"
-        target.write_text('{"project_id":"ok"}')
+        target.write_text('{"planner":"ok", "review":"ok", "coder":"ok"}')
         config = path / "agy-project.json"
         config.symlink_to(target)
         with mock.patch.dict(os.environ, {}, clear=True):
             with self.assertRaises(ValueError):
-                self.resolver.resolve_agy_project(self.workspace)
+                self.resolver.resolve_agy_project(self.workspace, "planner")
         config.unlink()
         config.write_bytes(b"x" * (4096 + 1))
         with mock.patch.dict(os.environ, {}, clear=True):
             with self.assertRaisesRegex(ValueError, "4 KiB"):
-                self.resolver.resolve_agy_project(self.workspace)
+                self.resolver.resolve_agy_project(self.workspace, "planner")
 
     def test_permission_profiles_declare_the_role_boundaries(self):
         self.assertEqual(PROFILES.read_text(), """version: 1
