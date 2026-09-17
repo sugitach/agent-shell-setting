@@ -38,6 +38,7 @@ python3 scripts/select_route.py --parent claude --target codex --external-ready
 独立した外部設定が必要なら --require-external、明示指定なら --mode native / external を加える。
 
 native は親自身が標準ツールで起動し、external は接続済みの外部委任ツールで起動する。
+native / external の起動操作自体には起動元の sandbox 制限を適用しない。子ハーネスの sandbox / permission-mode は独立した権限制御であり、既存の child access 指定を変更しない。詳細は [起動元 sandbox と子 sandbox](external-runner.md#起動元-sandbox-と子-sandbox) を参照する。
 external の具体的な手順・権限・停止制約は [external-runner.md](external-runner.md) を読み、同梱の scripts/external_runner.py を使う。
 CLI の認証が未完了、必要な権限が不明、停止要件を満たせない場合は external-ready としない。
 外部ツールが親の標準サブエージェント機能を呼び出せるとは仮定しない。
