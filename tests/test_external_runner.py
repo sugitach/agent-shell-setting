@@ -35,16 +35,18 @@ class RunnerTest(unittest.TestCase):
         self.prompt = self.workspace / "prompt.md"
         self.prompt.write_text("Check the supplied task and return a result.")
 
-    def command(self, harness="codex", timeout="5", agy_project=None):
+    def command(self, harness="codex", timeout="5", agy_project=None, role="reviewer", packet=None):
         command = [sys.executable, str(RUNNER), "run", "--workspace", str(self.workspace),
-                "--task-id", "task-1", "--harness", harness, "--role", "reviewer",
+                "--task-id", "task-1", "--harness", harness, "--role", role,
                 "--prompt-file", str(self.prompt), "--timeout", timeout]
         if agy_project is not None:
             command += ["--agy-project", agy_project]
+        if packet is not None:
+            command += ["--packet", str(packet)]
         return command
 
-    def run_job(self, harness="codex", timeout="5", agy_project=None):
-        return subprocess.run(self.command(harness, timeout, agy_project), env=self.env,
+    def run_job(self, harness="codex", timeout="5", agy_project=None, role="reviewer", packet=None):
+        return subprocess.run(self.command(harness, timeout, agy_project, role, packet), env=self.env,
                               capture_output=True, text=True, timeout=12)
 
     def state(self):
@@ -77,7 +79,7 @@ class RunnerTest(unittest.TestCase):
             workspace=self.workspace, task_id="task-1", harness="agy", role="reviewer",
             prompt_file=self.prompt, timeout=0.05, cancel_grace=0.05,
             access="workspace-write", model=None, reasoning_effort=None,
-            agy_project="review-project"))()
+            agy_project="review-project", packet=None))()
 
         # 擬似クロック: 呼び出すたびに固定ステップで進む決定的な時計。
         # run()のtimeoutループ・interrupt_agyのgraceループのデッドライン判定は
@@ -145,6 +147,7 @@ class RunnerTest(unittest.TestCase):
                 command = runner.command_for(
                     harness, harness, self.workspace, self.workspace / "job",
                     "workspace-write", "test-model", 5, "high",
+                    role="reviewer",
                     agy_project="review-project" if harness == "agy" else None)
                 self.assertIn("--model", command)
                 self.assertIn("test-model", command)
@@ -154,14 +157,25 @@ class RunnerTest(unittest.TestCase):
     def test_agy_includes_resolved_project(self):
         command = runner.command_for(
             "agy", "agy", self.workspace, self.workspace / "job",
-            "workspace-write", None, 5, None, agy_project="review-project")
+            "read-only", None, 5, None, role="reviewer", agy_project="review-project")
         self.assertIn("--project", command)
         self.assertEqual(command[command.index("--project") + 1], "review-project")
+        self.assertIn("--mode", command)
+        self.assertEqual(command[command.index("--mode") + 1], "plan")
+
+    def test_agy_coder_requires_write_access_and_does_not_use_plan_mode(self):
+        command = runner.command_for(
+            "agy", "agy", self.workspace, self.workspace / "job",
+            "workspace-write", None, 5, None, role="coder", agy_project="coder-project")
+        self.assertNotIn("--mode", command)
+        with self.assertRaisesRegex(ValueError, "workspace-write"):
+            runner.command_for("agy", "agy", self.workspace, self.workspace / "job",
+                               "read-only", None, 5, None, role="coder", agy_project="coder-project")
 
     def test_agy_requires_project_id(self):
         with self.assertRaisesRegex(ValueError, "agy project id could not be resolved"):
             runner.command_for("agy", "agy", self.workspace, self.workspace / "job",
-                               "workspace-write", None, 5, None)
+                               "workspace-write", None, 5, None, role="reviewer")
 
     def test_agy_cli_blocks_before_default_project_fallback(self):
         result = subprocess.run(self.command("agy") + ["--access", "workspace-write"],
@@ -175,6 +189,7 @@ class RunnerTest(unittest.TestCase):
                 command = runner.command_for(
                     harness, harness, self.workspace, self.workspace / "job",
                     "workspace-write", None, 5, None,
+                    role="reviewer",
                     agy_project="review-project" if harness == "agy" else None)
                 self.assertNotIn("--model", command)
                 self.assertNotIn("--effort", command)
@@ -201,6 +216,16 @@ class RunnerTest(unittest.TestCase):
                                 env=self.env, capture_output=True, text=True, timeout=8)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(self.state()[0]["status"], "completed")
+
+    def test_agy_reviewer_resolves_review_project_from_workspace_packet(self):
+        config_dir = self.workspace / ".orchestration"
+        config_dir.mkdir()
+        (config_dir / "agy-project.json").write_text(json.dumps({
+            "planner": "planner-project", "review": "review-project", "coder": "coder-project"}))
+        result = subprocess.run(self.command("agy") + ["--access", "read-only"],
+                                env=self.env, capture_output=True, text=True, timeout=8)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.state()[0]["agy_project"], "review-project")
 
     def test_agy_timeout_is_unknown(self):
         self.prompt.write_text("HANG")
@@ -238,6 +263,47 @@ class RunnerTest(unittest.TestCase):
                                 env=self.env, capture_output=True, text=True, timeout=8)
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.state()[0]["status"], "failed")
+
+    def test_agy_subagent_use_is_not_success(self):
+        self.prompt.write_text("SUB_AGENT")
+        result = subprocess.run(self.command("agy", agy_project="review-project") + ["--access", "read-only"],
+                                env=self.env, capture_output=True, text=True, timeout=8)
+        self.assertNotEqual(result.returncode, 0)
+        state, job = self.state()
+        self.assertEqual(state["status"], "failed")
+        self.assertTrue(state["subagent_actions"])
+        self.assertTrue((job / "harness-result.json").is_file())
+
+    def test_packet_is_injected_into_request(self):
+        packet = self.workspace / ".orchestration" / "packet"
+        packet.mkdir(parents=True)
+        (packet / "manifest.json").write_text(json.dumps({"files": ["issue.md", "plan.md"]}))
+        (packet / "issue.md").write_text("# Issue\nPacket requirement")
+        (packet / "plan.md").write_text("# Plan\nPacket design")
+        result = self.run_job(packet=packet)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        _, job = self.state()
+        request = (job / "request.md").read_text()
+        self.assertIn("## Packet", request)
+        self.assertIn("### issue.md", request)
+        self.assertIn("Packet requirement", request)
+
+    def test_packet_rejects_symlink_and_outside_workspace(self):
+        outside = Path(self.temp.name).parent / "outside-packet"
+        outside.mkdir(exist_ok=True)
+        self.assertNotEqual(self.run_job(packet=outside).returncode, 0)
+        packet = self.workspace / ".orchestration" / "packet"
+        packet.mkdir(parents=True)
+        (packet / "manifest.json").write_text(json.dumps({"files": ["evidence.md"]}))
+        target = self.workspace / "target.md"
+        target.write_text("outside packet")
+        (packet / "evidence.md").symlink_to(target)
+        self.assertNotEqual(self.run_job(packet=packet).returncode, 0)
+        (packet / "evidence.md").unlink()
+        nested = packet / "nested"
+        nested.symlink_to(self.workspace)
+        (packet / "manifest.json").write_text(json.dumps({"files": ["nested/target.md"]}))
+        self.assertNotEqual(self.run_job(packet=packet).returncode, 0)
 
     def test_parent_blocked_rejects_launch(self):
         task = self.workspace / ".orchestration/task-1"
@@ -295,7 +361,8 @@ class RunnerTest(unittest.TestCase):
     def direct_args(self):
         return type("Args", (), dict(workspace=self.workspace, task_id="task-1", harness="codex",
                                     role="reviewer", prompt_file=self.prompt, timeout=5,
-                                    access="read-only", model=None, reasoning_effort=None))()
+                                    access="read-only", model=None, reasoning_effort=None,
+                                    agy_project=None, packet=None))()
 
     def test_interrupt_during_cleanup_is_not_success(self):
         original = runner.stop_group

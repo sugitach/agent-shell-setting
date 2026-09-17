@@ -19,11 +19,12 @@ python3 /path/to/skills/orchestrator/scripts/external_runner.py run \
 
 ### Agy Project と Permission Grant プロファイル
 
-agy を起動する場合、親は必ず Agy Project ID を解決し、ランナーへ `--agy-project <id>` を渡す。
+agy を起動する場合、親は必ず role に対応する Agy Project ID を解決し、ランナーへ `--agy-project <id>` を渡す。
 ランナーはこれを agy の `--project <id>` に変換する。解決順は、run の `--agy-project`、環境変数
-`AGY_PROJECT_ID`、workspace の `.orchestration/agy-project.json`（`{"project_id":"<id>"}`）である。
+`AGY_PROJECT_ID_PLANNER` / `AGY_PROJECT_ID_REVIEW` / `AGY_PROJECT_ID_CODER`、workspace の
+`.orchestration/agy-project.json`（`{"planner":"<id>","review":"<id>","coder":"<id>"}`）である。
 いずれもなければ既定 Project へフォールバックせず、事前条件不備として終了コード2で停止する。
-このローカル JSON は通常ファイル・4 KiB以下・UTF-8・単一の `project_id` キーだけを受け付ける。
+このローカル JSON は通常ファイル・4 KiB以下・UTF-8・3つの role キーだけを受け付ける。
 
 [agy-permission-profiles.yaml](../agy-permission-profiles.yaml) は planner / coder / reviewer が期待する
 workspace 相対の read/write 境界を宣言する。planner と reviewer は全体を読み `.orchestration` だけへ書き込み、
@@ -48,7 +49,7 @@ native 呼び出しでは親の公開ツールが model・reasoning effort を�
 
 - 既定は read-only。Codex は read-only sandbox、Claude は Read/Glob/Grep のみに制限する。テスト実行や Issue 操作が必要なら、その範囲が許可されていることを親が確認する。
 - workspace-write は Codex の workspace-write sandbox、Claude の acceptEdits を指定する。Claude のシェル実行等は既存の許可設定に依存し、全コマンドを許可するものではない。
-- agy は read-only 強制手段が未確認なので既定では起動を拒否する。workspace-write を明示した場合のみ sandbox を有効にして起動する。これは Codex と同じ権限制御を保証するものではない。
+- agy の planner / reviewer は `--mode plan` と sandbox を付け、read-only で起動できる。coder は workspace-write が必須で、plan mode を付けない。Agy の権限境界は選択した Project の Permission Grant で設定する。
 - 権限回避フラグ、認証情報のコピー、hook の無効化は行わない。Claude 内からの Claude CLI 起動がネスト制約に阻まれる場合も環境変数で迂回せず、native または利用可能な接続方式を検討する。
 
 ## 外部 Claude の認証確認
@@ -79,7 +80,7 @@ cancel は取消要求を記録するだけ。親は status が cancelled / unkn
 Codex / Claude の取消・タイムアウト・SIGINT/SIGTERM は、起動したローカルプロセスグループに SIGTERM、猶予後 SIGKILL を送り回収する。
 agy は stopping に遷移して SIGINT を送り、`--cancel-grace`（既定5秒、最大60秒）の間、終了応答を待つ。
 init と同じ会話IDの終端 result と CLI 終了が確認でき、強制停止へ移行していなければ stop_confirmed=true とする。result 不在・会話ID不一致・強制停止時は unknown とし、再起動を拒否する。
-終了処理中の中断も成功扱いしない。SUCCESS でも denied_actions または空回答があれば failed とする。
+終了処理中の中断も成功扱いしない。SUCCESS でも denied_actions、sub-agent 使用、または空回答があれば failed とする。
 stop_confirmed はハーネスの終了応答を意味し、切り離されたプロセスや外部サービス内部の全処理停止を保証しない。
 ランナーを SIGKILL すると回収処理を実行できない。ロックが消えても旧 starting/running ジョブがあるタスクの再起動は拒否する。
 状態不明時は子の停止を外部から確認し、根拠を記録して旧ジョブの状態を解決する。確認せず状態を削除・書き換えて再起動しない。
