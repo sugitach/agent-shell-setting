@@ -52,9 +52,14 @@ native 呼び出しでは親の公開ツールが model・reasoning effort を�
 - agy の planner / reviewer は `--mode plan` と sandbox を付け、read-only で起動できる。coder は workspace-write が必須で、plan mode を付けない。Agy の権限境界は選択した Project の Permission Grant で設定する。
 - 権限回避フラグ、認証情報のコピー、hook の無効化は行わない。Claude 内からの Claude CLI 起動がネスト制約に阻まれる場合も環境変数で迂回せず、native または利用可能な接続方式を検討する。
 
+## 起動元 sandbox と子 sandbox
+
+親が native / external の子を起動する操作自体には、起動元の sandbox 制限を適用しない。子の `--sandbox`、`--permission-mode`、Permission Grant などは子ハーネスが担当作業内で実行できる範囲を制御する別レイヤーであり、両者を混同しない。
+このため、既存の child access 指定とランナーの起動引数は変更しない。次節の外部 Claude の認証確認は、この起動元 sandbox に関する一般則の一事例である。
+
 ## 外部 Claude の認証確認
 
-Codex のサンドボックス内では、通常のターミナルでログイン済みでも Claude CLI が `Not logged in · Please run /login` を返す場合がある。子も親のサンドボックス制限を継承する。
+Codex のサンドボックス内では、通常のターミナルでログイン済みでも Claude CLI が `Not logged in · Please run /login` を返す場合がある。子の作業権限は、起動元 sandbox とは別レイヤーで指定した access と permission-mode に従う。
 
 1. Codex のサンドボックスから外部 Claude を初めて起動する前に、起動予定の環境で `claude auth status` を確認する。同じセッション・同じ実行環境で確認済みなら再利用する。アカウント情報を含む出力は全文を共有せず、ログイン状態と認証方式だけを記録する。
 2. 未ログイン判定なら、利用可能な承認付き実行機能でサンドボックス外の `claude auth status` と比較する。既存の承認が対象操作を含む場合は確認を繰り返さず、その範囲で進める。

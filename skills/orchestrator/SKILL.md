@@ -26,7 +26,7 @@ description: 複数ハーネスで開発を分担するとき、唯一の親セ�
    丸め込みをしない。
 3. [references/routing.md](references/routing.md) に従い、task_role_state.py continue が返す同じ roles.<role> の固定 harness を使って、同一ハーネスなら利用可能な標準サブエージェントを優先し、別ハーネスや独立した設定が必要な場合は外部呼び出しを選ぶ。通常継続では workspace / YAML を再読込しない。親の公開ツールと必要な機能を確認し、選択ツールで方式を確定する。要求を満たす方式がなければ blocked として制約を報告する。
 4. 同じタスクに既存の親がいれば重複起動しない。保存した owner セッションと実際の生存状態を確認し、引き継ぐときは旧親・子が停止済みであることを確認する。判断できなければ確認を求める。
-5. 選んだ方式で独立した子コンテキスト（標準サブエージェントまたは外部セッション）を起動し、同じ固定 roles.<role> の harness と、役割 skill、Issue・計画、対象ディレクトリ、権限、返却先、解決済みの model・reasoning effort を渡す。解決値が null の field は native の起動パラメータおよび external runner の対応引数を省略する。active_child には実際に渡したこのレコードの値を記録する。子からの再委任は禁止。一度に動かす担当は1セッションとし、書き込み競合を避ける。
+5. 選んだ方式で独立した子コンテキスト（標準サブエージェントまたは外部セッション）を起動し、同じ固定 roles.<role> の harness と、役割 skill、Issue・計画、対象ディレクトリ、権限、返却先、解決済みの model・reasoning effort を渡す。解決値が null の field は native の起動パラメータおよび external runner の対応引数を省略する。active_child には実際に渡したこのレコードの値を記録する。子からの再委任は禁止。一度に動かす担当は1セッションとし、書き込み競合を避ける。起動自体には起動元 sandbox 制限を適用せず、以降の親子往復は開始時承認を継承する。詳細は [起動元 sandbox と子 sandbox](references/external-runner.md#起動元-sandbox-と子-sandbox) と [承認の継承](references/handoff.md#承認の継承) を参照する。
 
 設定を変更して続行するには、ユーザーが明示 resume を指示し、active_child がないことを確認してから
 task_role_state.py resume を使う。resume は全 role を再解決し、旧新値と reason を
