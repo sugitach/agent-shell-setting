@@ -211,8 +211,18 @@ def task_lock(task):
 def command_for(harness, executable, workspace, job, access, model, timeout,
                 reasoning_effort=None, role=None, agy_project=None):
     if harness == "codex":
+        # 注記: codexのネストサンドボックス(終了コード71)を回避するため、
+        # codex自身のサンドボックス機構(--sandbox/approval_policy)は使用しない。
+        # read-only強制などのアクセス制御は、この呼び出し元である
+        # Bash tool側の親Seatbelt(サンドボックス)設定に責任が移る。
+        # つまり「read-onlyだから安全」という前提は、親サンドボックスが
+        # 実際にファイルシステム書き込みを拒否していることに依存する。
+        #
+        # `access`引数はcodex分岐では未使用になるが、command_for()の
+        # シグネチャ自体とCLIの`--access`選択肢は変更しない。
+        # claude分岐とagyのrole guardは引き続き`access`を使用するため。
         command = [executable, "exec", "--json", "--color", "never", "--cd", str(workspace),
-                   "--sandbox", access, "-c", 'approval_policy="never"',
+                   "--dangerously-bypass-approvals-and-sandbox",
                    "--output-last-message", str(job / "response.md")]
         if model:
             command += ["--model", model]
