@@ -49,13 +49,13 @@ command/args をSDKの `stdio_client` で起動する代理検証である。
 複数ジョブにまたがって常駐させる。ジョブごとにサーバーは起動しない。
 子CLIは `Popen(start_new_session=True)` と通常ファイルの標準入出力で起動し、
 PTYを割り当てない。claude/codexの非対話モードなのでPTY制約を回避できる。
-サーバーを起動元のサンドボックスの外へ移す仅組みではなく、その制約は継承する。
+サーバーを起動元のサンドボックスの外へ移す仕組みではなく、その制約は継承する。
 codex の起動引数は既存runnerと同じく内部サンドボックスを無効化する。
 codex の `access=read-only` の強制は親の実行環境が担う。
 
 SIGTERM/SIGINTのハンドラは終了イベントを設定するだけで、専用スレッドが
 `shutdown_and_wait_all()` を実行してからサーバーを終了する。
-stdio EOFでも `finally` から同じ終了処理を実行する。
+stdio EOF でも `finally` から同じ終了処理を実行する。
 新規起動と終了処理はロックで直列化し、終了イベント設定後はlaunchを拒否する。
 
 ## ツールと応答契約
@@ -87,7 +87,7 @@ cancelは要求受付時点の状態を返すので、停止完了はstatusで�
 ```
 
 停止処理の応答には `stop_confirmed`（boolean）も付く。
-`reason` は cancelledで `user_requested|shutdown`、timed_outで `timeout`、
+`reason` はcancelledで `user_requested|shutdown`、timed_outで `timeout`、
 それ以外はnull。判定の優先順位は shutdown → cancel → timeout → 自然終了。
 終端状態 `completed|failed|timed_out|cancelled` は不変。
 自然終了時は終了コードと非空の最終回答を確認し、Claude JSONのエラーや権限拒否も失敗にする。
@@ -101,10 +101,10 @@ CodexはNDJSONをstdout.logに保存し、`--output-last-message` の回答フ�
 
 ジョブIDはlaunch時に発行するUUID。状態は
 `.orchestration/<task_id>/jobs/<job_id>/state.json` に保存する。
-サーバーのregistryに存在するjobだけが書込対象で、オーナーはメモリ内状態を正本とする。
+サーバーのregistryに存在するjobだけが書込み対象で、オーナーはメモリ内状態を正本とする。
 別サーバー同士のlaunchもファイルロックで直列化する。
 
-| 状況 | 応答 | 永続状態への書込 |
+| 状況 | 応答 | 永続状態への書込み |
 | --- | --- | --- |
 | 非オーナーが非終端jobのstatusを読む | unknown | なし |
 | 非オーナーが終端jobのstatusを読む | 保存した応答そのまま | なし |
@@ -118,13 +118,13 @@ CodexはNDJSONをstdout.logに保存し、`--output-last-message` の回答フ�
 ## 停止確認
 
 ジョブ単位のロックで冪等に SIGTERM → cancel_grace → SIGKILL → 消滅確認を行う。
-確認間隔は最大10.05秒、SIGKILL後の確認期限は独立した `KILL_CONFIRM_TIMEOUT=2` 秒。
+確認間隔は最大0.05秒、SIGKILL後の確認期限は独立した `KILL_CONFIRM_TIMEOUT=2` 秒。
 毎回 `poll()` で代表プロセスを回収し、`killpg(pid, 0)` の `ProcessLookupError`
 によるグループ全体の消滅確認が成立して初めて終了コードと終端状態を確定する。
-代表プロセスの回収やシグナル送信だけでは終了化しない。
+代表プロセスの回収やシグナル送信だけでは終端化しない。
 
 SIGTERM直後の生存確認で一時的にEPERMが返る場合も消滅とは扱わず再確認する。
-待機時間は残り献予を超えないようにし、期限でも再確認してからSIGKILLへ進む。
+待機時間は残り猶予を超えないようにし、期限でも再確認してからSIGKILLへ進む。
 期限内に消滅を確認できなければunknownにし、exit_codeは未確定のままにする。
 停止未確認のjobは後の停止処理で再確認できるが、強制救済は本Issueの対象外。
 `stop_confirmed` は切り離されたプロセスや外部サービス内部の全処理停止を保証しない。
