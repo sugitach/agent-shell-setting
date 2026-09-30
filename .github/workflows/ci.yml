@@ -22,7 +22,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: python -m unittest discover -s tests -p "test_*.py" -v
+      - run: pip install pytest anyio -r .orchestration/mcp-launcher-bridge/requirements.txt
+      - run: python -m pytest tests -v
 
   agy-cooperative-e2e-reference:
     name: "参考: agy協調SIGINT E2E（非必須・DoD対象外）"

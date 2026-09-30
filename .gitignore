@@ -4,4 +4,10 @@ __pycache__/
 .DS_Store
 .venv/
 .backups/
-.orchestration/
+.orchestration/*
+!.orchestration/mcp-launcher-bridge/
+.orchestration/mcp-launcher-bridge/*
+!.orchestration/mcp-launcher-bridge/server.py
+!.orchestration/mcp-launcher-bridge/launcher_core.py
+!.orchestration/mcp-launcher-bridge/requirements.txt
+!.orchestration/mcp-launcher-bridge/CODEX_SETUP.md
