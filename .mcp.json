@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "agy-bridge": {
+      "command": "/Users/sugita/work/agent-shell-setting/.orchestration/mcp-agy-bridge/venv/bin/python",
+      "args": ["/Users/sugita/work/agent-shell-setting/.orchestration/mcp-agy-bridge/server.py"]
+    },
+    "mcp-launcher-bridge": {
+      "command": "/Users/sugita/work/agent-shell-setting/.orchestration/mcp-launcher-bridge/venv/bin/python",
+      "args": ["/Users/sugita/work/agent-shell-setting/.orchestration/mcp-launcher-bridge/server.py"]
+    }
+  }
+}
