@@ -154,6 +154,13 @@ class RunnerTest(unittest.TestCase):
                 self.assertIn("--effort", command)
                 self.assertIn("high", command)
 
+    def test_codex_bypasses_nested_sandbox(self):
+        codex = runner.command_for("codex", "codex", self.workspace, self.workspace / "job",
+                                   "workspace-write", None, 5)
+        self.assertIn("--dangerously-bypass-approvals-and-sandbox", codex)
+        self.assertNotIn("--sandbox", codex)
+        self.assertNotIn('approval_policy="never"', codex)
+
     def test_agy_includes_resolved_project(self):
         command = runner.command_for(
             "agy", "agy", self.workspace, self.workspace / "job",
