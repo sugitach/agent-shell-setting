@@ -37,6 +37,8 @@ async def connect(workspace):
     entry = configuration['mcp-launcher-bridge']
     assert entry['command'] == str(BRIDGE / 'venv/bin/python')
     assert entry['args'] == [str(BRIDGE / 'server.py')]
+    # GitHub Contents API経由の反映では実行ビットが失われるため、実行時に保証する。
+    DUMMY.chmod(DUMMY.stat().st_mode | 0o111)
     assert DUMMY.is_file() and os.access(DUMMY, os.X_OK), '実行可能なダミーCLIが必要'
     stdio_module = importlib.import_module('mcp.client.stdio')
     original_spawn = stdio_module._create_platform_compatible_process
