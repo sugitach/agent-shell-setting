@@ -13,7 +13,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 BRIDGE = ROOT / '.orchestration/mcp-launcher-bridge'
 sys.path.insert(0, str(BRIDGE))
-import launcher_core as core
+import launcher_core as core  # noqa: E402
 
 
 @pytest.fixture

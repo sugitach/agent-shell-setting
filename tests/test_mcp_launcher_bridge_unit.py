@@ -1,6 +1,5 @@
 """MCP起動管理の排他・所有権・停止確認を決定的なモックで検証する。"""
 
-import importlib.util
 import json
 import os
 from pathlib import Path
@@ -9,7 +8,6 @@ import subprocess
 import sys
 import tempfile
 import threading
-import time
 import unittest
 from unittest import mock
 
